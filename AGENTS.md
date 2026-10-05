@@ -1,0 +1,165 @@
+# ワークアウト記録（AGENTS.md：このアプリ専用のルール）
+
+共通ルールは `ai-rules/CODING_RULES.md`（正本 `hirokode/ai-rules` のコピー）。
+このファイルには「このアプリにしか当てはまらないこと」だけを書く。
+セットアップ手順・動作確認・困ったときは `README.md`。
+
+## アプリの概要
+
+自分1人用のワークアウト記録 PWA（スマホのホーム画面から使う）。
+目的は「記録を残すこと」ではなく「続けること」。**1セット記録するまでの操作数を最小にすることを最優先**にする。
+
+- 記録：筋トレ（重量×回数）・自重（回数＋任意の加重）・有酸素（時間・距離・任意のカロリー）。前回の値を表示してワンタップで流用
+- 週テンプレート（上半身A・下半身・上半身B）を曜日で提案し、1タップで「今日のメニュー」に展開
+- 懸垂カウンター（ホームの「懸垂 +2」）
+- 今日のまとめ・部位の色分け・直近7日の部位の頻度・カレンダーヒートマップ・種目ごとの推移・自己ベスト・週／月のサマリー
+- 体調：朝夜の血圧・体重・メモ。グラフ（基準線・7日移動平均）・月平均・受診用の書き出し（CSV／画像）
+
+## 構成
+
+```
+スマホのブラウザ ── GitHub Pages（index.html / js/ / sw.js など）
+   │  端末内の IndexedDB に先に保存（オフラインでも記録できる）
+   │  裏で fetch（POST, Content-Type なし）
+   ▼
+GAS ウェブアプリ（gas/）── スプレッドシート「ワークアウト記録 データ」
+```
+
+### このアプリ固有の例外：GAS の URL を config.js に書かない
+
+NEW_APP.md 手順5では `/exec` の URL を `config.js` にコミットするが、**このアプリは血圧・体重という健康情報を扱うため例外**とする。
+
+- GAS の URL と合言葉は、アプリの「設定」画面で入力し、端末の localStorage（`wo.apiUrl`・`wo.passcode`）にだけ保存する
+- そのため `config.js` は無い。作らないこと
+- Public リポジトリには、URL・合言葉・デプロイID・スクリプトID・スプレッドシートIDのいずれも入れない（コミットメッセージ・コメント・ドキュメントも含む）
+- 書き出したファイル（`*.csv`・`bp_*.png`）も .gitignore 済み。commit 前に `git status` で必ず確認する
+- 合言葉方式は「URL を知られたときの目隠し」程度の守り。強い認証ではないことを理解して扱う
+
+### ローカルファースト（同期のしくみ）
+
+GAS は応答に1〜3秒かかるため、**画面は GAS を待たない**。
+
+1. 記録は `js/store.js` が IndexedDB に保存し、画面はすぐ更新する
+2. 変更した行は「未同期」（outbox）に積み、`js/sync.js` が1.5秒後にまとめて送る（action: `sync`）
+3. 送れなかったら未同期のまま残し、オンライン復帰・画面を開いたとき・60秒ごとに再送する
+4. 画面上部の小さな表示：同期済み／未同期n件／オフライン／同期中／同期エラー／端末のみ（URL 未設定）
+5. URL・合言葉が未設定でも全機能が動く（端末だけに保存）
+
+同期の決まり（`gas/Api.js` の先頭にも書いてある）：
+
+- ID は端末で作る UUID（初期データは `ex-bench` などの固定ID）。同じIDが再送されたら上書き（二重登録しない）
+- 同じ行が食い違ったら `updated_at` が新しいほうを採用（後勝ち）
+- **削除は行を消さずに `deleted=TRUE`**（消すと次の同期で復活するため）
+- `conditions`（体調）だけは「朝の血圧・夜の血圧・体重・メモ」のまとまりごとに新しいほうを残す（`field_times`）。朝だけ保存した後に夜を保存しても朝の値は消えない
+- サーバーが書いた行には `synced_at`（サーバーの時刻）を付け、画面は前回の時刻（since）より後の行だけ受け取る
+- 初期データ（種目マスタ・テンプレート）は端末で最初に作り、最初の同期でシートに入る。固定IDと固定日時なので、別の端末で作っても重複しない
+
+## ファイル構成
+
+| ファイル | 役割 |
+|---|---|
+| index.html | 画面の骨組み（中身は js/app.js が描画） |
+| style.css | 見た目（ライト／ダーク対応・セーフエリア対応） |
+| js/app.js | 画面の切り替え（`#/home` など）・各画面の描画と操作 |
+| js/store.js | 端末内のデータ（IndexedDB）・未同期の管理・サーバーの形との変換 |
+| js/sync.js | GAS との通信と同期・同期状態の表示用データ |
+| js/calc.js | 集計（ボリューム・推定1RM・自己ベスト・部位・サマリー・移動平均） |
+| js/charts.js | グラフ（Chart.js） |
+| js/export.js | 受診用の書き出し（CSV・PNG・共有シート） |
+| js/seed.js | 初期データ（種目マスタ19種目・テンプレート3つ・部位7種類） |
+| js/util.js | 日付（JST）・数値の表示などの小さな道具 |
+| js/version.js | **アプリのバージョン**（設定画面に表示・Service Worker のキャッシュ名） |
+| sw.js / manifest.json / icons/ | PWA（ホーム画面追加・オフライン表示） |
+| lib/chart.umd.min.js | Chart.js 4.5.1（MIT、`lib/chart.js-LICENSE.md`）。オフラインでも出るよう同梱 |
+| gas/Code.js | doGet / doPost・合言葉の確認・`setup()` |
+| gas/Api.js | API の中身（`ping`・`sync`）・入力チェック・体調のまとめ方 |
+| gas/Db.js | シートの定義（SCHEMA）・スプシの自動作成・読み書き |
+| gas/appsscript.json | タイムゾーン Asia/Tokyo・ウェブアプリ（全員・自分として実行） |
+| .github/workflows/deploy-gas.yml | gas/ の変更を main に入れると自動で push＋既存デプロイ上書き |
+| .claude/launch.json | ローカル確認用サーバー（`python -m http.server 8124`） |
+| ai-rules/CODING_RULES.md | 共通ルールのコピー |
+
+## API（gas/）
+
+すべて `POST`。本文は JSON 文字列で `{ action, passcode, ... }`。Content-Type は付けない（CORS の事前確認を避けるため）。
+返り値は `{ ok: true, data }` か `{ ok: false, error, message }`。合言葉が違うと `error: "auth"`。`doGet` はデータを返さない。
+
+| action | 引数 | 内容 |
+|---|---|---|
+| ping | なし | 合言葉とつながりの確認（設定画面の「保存して接続テスト」） |
+| sync | since, changes: { テーブル名: [行…] } | 変更を書き、since より後に書かれた行を返す。返り値 `{ now, rows }` |
+
+## スクリプトプロパティ
+
+| 名前 | 中身 | 作り方 |
+|---|---|---|
+| WORKOUT_PASSCODE | 合言葉（アプリの設定画面に入れるものと同じ） | **手で設定する**（README 参照） |
+| SPREADSHEET_ID | データ用スプレッドシートのID | 初回に自動で作られる |
+
+## スプレッドシートの構成
+
+全セル「書式なしテキスト」。日付は `YYYY-MM-DD`、日時は `2026-10-05T08:30:00.000+09:00`（JST）の文字列。真偽は `TRUE`/`FALSE`。
+
+| シート | 列 |
+|---|---|
+| exercises | id, name, type(strength/bodyweight/cardio), parts（「胸,腕」のようにカンマ区切り・先頭が主部位）, step（±の増減幅）, initial_weight, per_hand（片手の重さで記録）, sort_order, active（一覧に表示）, created_at, updated_at, deleted, synced_at |
+| logs | id, date, exercise_id, kind(normal/counter), set_no, weight, reps, added_weight, duration_min, distance_km, calories, memo, created_at, updated_at, deleted, synced_at |
+| templates | id, name, items（[{exercise_id, sets}] の JSON）, weekday（0=日〜6=土、空＝提案しない）, sort_order, created_at, updated_at, deleted, synced_at |
+| conditions | id（＝日付）, date, am_sys, am_dia, pm_sys, pm_dia, weight, memo, field_times（{am,pm,weight,memo} の更新日時 JSON）, created_at, updated_at, deleted, synced_at |
+| settings | id, value, updated_at, deleted, synced_at（今は `weight_goal_per_month` だけ） |
+
+## 計算の決まり（js/calc.js）
+
+- 総ボリューム：筋トレ＝重量×回数（`per_hand` の種目は両手分で×2）／自重＝（その日までの最新の体重＋加重）×回数（体重未記録なら加重×回数）／有酸素は入れない
+- 推定1RM：Epley式 `重量 × (1 + 回数 ÷ 30)`。画面に式を出す。**「MAXを測ろう」と促す導線は作らない**
+- 自己ベスト：保存せず毎回計算。筋トレ＝最大重量・推定1RM／自重＝最大回数・最大加重／有酸素＝最長距離・最長時間（ペースは自己ベストにしない）。その種目を初めてやった日は演出を出さない
+- 懸垂カウンター（`kind=counter`）：ボリュームには入れるが、運動日・部位・自己ベスト・「今日のセット数」には数えない
+- 部位：主部位 1、ほかの部位 0.5 で数える
+- 血圧の7日移動平均：その日を含む直近7日のうち、記録がある日だけで平均（抜けた日は飛ばす）
+
+## デプロイ
+
+- 画面：main に入ると GitHub Pages（`https://hirokode.github.io/workout-app/`）に1〜2分で反映
+- サーバー：`gas/` の変更が main に入ると GitHub Actions が `clasp push` → `clasp deploy -i <本番デプロイID>` を実行（URL は変わらない）
+- `clasp push` だけでは URL の中身は変わらない。**新しいデプロイは作らない**（URL が変わり、各端末の設定を入れ直すことになる）
+- 手元（PC）で直接やる場合：`cd "C:\Users\hiro2\dev\apps\workout-app\gas"; clasp push -f; if ($?) { clasp deploy -i <デプロイID> -d "<変更メモ>" }`
+- デプロイIDなどの実際の値は `アプリURL.txt`（.gitignore 済み）と GitHub Secrets にだけある
+- 権限（`oauthScopes`）を増やしたときは、PC のブラウザでエディタを開き `setup` を ▶実行して承認し直す
+
+## このアプリ固有のルール
+
+- **画面のファイル（js/・style.css・index.html など）を変えたら `js/version.js` の `APP_VERSION` を上げる**。sw.js のキャッシュ名もこれで変わる（上げないと古い画面が残る）
+- 新しい画面ファイルを足したら `sw.js` の `SHELL_FILES` にも足す（オフラインで開けなくなるため）
+- 列を増やすときは `gas/Db.js` の SCHEMA・`gas/Api.js` の FIELD_RULES・`js/store.js` の FIELDS の3か所を同じ列名でそろえる（既存の列の順番は変えない。末尾に足す）
+- 既存の行の書き換え・列の削除や並べ替えは、実行前にユーザーに確認する
+- ユーザーが入力した文字を画面に出すときは必ず `esc()` を通す
+- 画面とサーバーを同時に変えるときは、新しい画面が古いサーバーを呼んでも壊れないように作る
+- 外部ライブラリは Chart.js だけ。CDN からは読まない（オフラインで動かなくなるため）
+- 片手操作：タップ領域は 48px 以上。記録までのタップ数を増やす変更はしない（ベンチプレス3セットがホームから5タップ）
+- 体調の画面では、血圧の値に警告色（赤など）を付けない。記録が抜けても責める表示を出さない。連続記録日数の演出は付けない
+- 日付は JST の `YYYY-MM-DD` 文字列で扱い、Date オブジェクトを画面とサーバーの間で受け渡さない（`js/util.js` の `todayJst()`・`addDays()` を使う）
+
+## 動作確認（エージェント向け）
+
+- 構文チェック：`node --check` を js/*.js・sw.js・gas/*.js にかける
+- ローカル：リポジトリ直下で `python -m http.server 8124`（または `npx http-server -p 8124 -c-1`）→ http://localhost:8124/ 。URL 未設定なら「端末のみ」で全機能が動く
+- Service Worker は https か localhost でしか動かない。スマホでの確認は GitHub Pages に出してから
+
+## スマホ（クラウド版）から頼まれたときの進め方
+
+ユーザーは「〇〇を直して」のような普段の言葉だけで頼む。次の流れを、確認を待たずに最後まで行う。
+
+1. 依頼内容を実装する（画面を変えたら `js/version.js` の APP_VERSION を上げる）
+2. 構文チェックをする（js/*.js・sw.js・gas/*.js を node --check）
+3. claude/… ブランチにコミットして push し、Pull Request を作る
+4. PR を main にマージする
+5. 反映を確認する（GitHub Pages の更新、gas/ を変えたときは Actions「GASにデプロイ」が成功したか）
+6. 最後に「何を変えたか」と「スマホでどう確認すればよいか（設定画面のバージョン番号など）」を短く伝える
+
+ただし、次の場合はマージの前に必ずユーザーに確認する：
+- スプレッドシートの列の変更や、既存データの書き換えを伴うとき
+- 認証（合言葉）や同期のしくみを変えるとき
+- GAS に新しい権限（oauthScopes）が必要になるとき → PC で setup を ▶実行して承認し直す必要があるため、その手順も伝える
+
+Actions が失敗したら、ログを読んで直せるものは直して、もう一度 PR を作る。
+認証エラー（clasp の認証切れ）の場合だけは直せないので、PC での `clasp login` と `CLASPRC_JSON` の再登録をユーザーに依頼する。
