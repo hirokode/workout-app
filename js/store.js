@@ -4,9 +4,9 @@
 // 削除は行を消さずに deleted=true にする（サーバーや別の端末に削除を伝えるため）。
 
 import { nowIso } from './util.js';
-import { seedExercises, seedTemplates } from './seed.js';
+import { seedExercises, seedTemplates, SEED_VERSION } from './seed.js';
 
-export const TABLES = ['exercises', 'logs', 'templates', 'conditions', 'settings'];
+export const TABLES = ['exercises', 'logs', 'templates', 'conditions', 'settings', 'plans'];
 
 // サーバー（スプレッドシート）の列と型。gas/Db.js の SCHEMA と列名をそろえる
 const FIELDS = {
@@ -17,19 +17,20 @@ const FIELDS = {
   templates: { id: 's', name: 's', items: 'j', weekday: 'n', sort_order: 'n', created_at: 's', updated_at: 's', deleted: 'b' },
   conditions: { id: 's', date: 's', am_sys: 'n', am_dia: 'n', pm_sys: 'n', pm_dia: 'n', weight: 'n', memo: 's',
     field_times: 'j', created_at: 's', updated_at: 's', deleted: 'b' },
-  settings: { id: 's', value: 's', updated_at: 's', deleted: 'b' }
+  settings: { id: 's', value: 's', updated_at: 's', deleted: 'b' },
+  plans: { id: 's', date: 's', template_id: 's', status: 's', created_at: 's', updated_at: 's', deleted: 'b' }
 };
 
 // 体調の項目のまとまり（朝の血圧・夜の血圧・体重・メモ）。まとまりごとに新しいほうを残す
 export const CONDITION_GROUPS = { am: ['am_sys', 'am_dia'], pm: ['pm_sys', 'pm_dia'], weight: ['weight'], memo: ['memo'] };
 
 const DB_NAME = 'workout-app';
-const DB_VERSION = 1;
+const DB_VERSION = 2; // 2：plans（予定）を追加
 
 let idb = null;
 const data = {};
 TABLES.forEach(t => { data[t] = new Map(); });
-const meta = { outbox: {}, since: '', seeded: false };
+const meta = { outbox: {}, since: '', seeded: false, seedVersion: 0 };
 const listeners = new Set();
 let ver = 0; // 変更のたびに増える（calc.js の集計の作り直しの目印）
 
@@ -106,13 +107,16 @@ export async function init() {
     console.error(e);
     idb = null; // 使えない環境（プライベートブラウズなど）ではメモリだけで動かす
   }
-  if (!meta.seeded) {
+  // 初期データ。版が上がったら、まだ無い ID の分だけ足す（削除した初期データは deleted の行が残っているので復活しない）
+  const seedVer = meta.seedVersion || (meta.seeded ? 1 : 0);
+  if (seedVer < SEED_VERSION) {
     const ex = seedExercises().filter(r => !data.exercises.has(r.id));
     const tp = seedTemplates().filter(r => !data.templates.has(r.id));
     ex.forEach(r => { data.exercises.set(r.id, r); meta.outbox['exercises:' + r.id] = r.updated_at; });
     tp.forEach(r => { data.templates.set(r.id, r); meta.outbox['templates:' + r.id] = r.updated_at; });
     meta.seeded = true;
-    await idbWrite({ exercises: ex, templates: tp }, ['seeded', 'outbox']);
+    meta.seedVersion = SEED_VERSION;
+    await idbWrite({ exercises: ex, templates: tp }, ['seeded', 'seedVersion', 'outbox']);
   }
   return { persistent: !!idb };
 }

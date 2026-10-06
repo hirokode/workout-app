@@ -558,3 +558,78 @@ textarea {
 .modal-body h2 { display: flex; align-items: baseline; gap: 8px; margin-bottom: 6px; }
 .modal-actions { display: flex; gap: 8px; margin-top: 14px; }
 .modal-actions .btn { flex: 1; }
+
+/* ---------- 予定 ---------- */
+
+.plan-actions { display: flex; justify-content: space-between; gap: 8px; margin-top: -4px; }
+.next-plan { margin: 8px 0 0; }
+.missed { background: color-mix(in srgb, var(--accent) 6%, var(--card)); }
+.missed p { margin: 0; }
+.menu-note { margin: 6px 4px 0; font-size: .85rem; color: var(--muted); white-space: pre-wrap; }
+
+.cal { display: grid; grid-template-columns: repeat(7, 1fr); gap: 3px; }
+.cal-wd { text-align: center; font-size: .7rem; color: var(--muted); padding-bottom: 2px; }
+.cal-cell {
+  min-height: 54px;
+  min-width: 0;
+  padding: 3px 2px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--bg);
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 2px;
+  text-align: left;
+}
+.cal-cell.out { opacity: .4; }
+.cal-cell.today { box-shadow: inset 0 0 0 2px var(--accent); }
+.cal-cell.sel { background: var(--accent-soft); }
+.cal-day { font-size: .72rem; color: var(--muted); padding-left: 2px; font-variant-numeric: tabular-nums; }
+.cal-cell.today .cal-day { color: var(--accent); font-weight: 700; }
+.cal-chip {
+  display: inline-block;
+  max-width: 100%;
+  padding: 1px 3px;
+  border-radius: 4px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: .62rem;
+  font-weight: 600;
+  line-height: 1.3;
+  /* 「上半身A」「上半身B」が見分けられるよう、省略せずに2行まで折り返す */
+  word-break: break-all;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+.cal-legend .cal-chip, .plan-label .cal-chip { display: inline-block; }
+.cal-chip.done { background: color-mix(in srgb, var(--done) 18%, transparent); color: var(--done); }
+.cal-chip.missed { background: transparent; color: var(--muted); box-shadow: inset 0 0 0 1px var(--line); }
+.cal-chip.skipped { background: transparent; color: var(--muted); text-decoration: line-through; }
+.cal-legend { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; }
+.cal-legend .cal-chip { margin-left: 4px; }
+
+.plan-panel { margin-bottom: 8px; }
+.plan-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.plan-label { flex: 1; font-weight: 600; min-width: 8em; }
+.plan-label .cal-chip { font-size: .72rem; vertical-align: middle; }
+.plan-select { flex: 0 1 12em; width: auto; }
+
+.sched-row { display: flex; align-items: center; gap: 12px; }
+.sched-row > span:first-child { width: 2.5em; margin: 0; font-size: .95rem; color: var(--text); }
+.sched-row .select { flex: 1; }
+
+/* テンプレートの編集・取り込み */
+.tpl-block { border-top: 1px solid var(--line); padding-bottom: 8px; }
+.tpl-block .tpl-item { border-top: 0; }
+.tpl-targets { display: flex; gap: 8px; margin-bottom: 6px; }
+.tpl-targets .field-in { flex: 1; }
+.tpl-note { width: 100%; min-height: 40px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); padding: 6px 10px; font-size: .9rem; }
+#prompt-text, #import-text { font-size: .8rem; margin-top: 8px; }
+.import-errors { margin: 8px 0; padding: 8px 10px; border-radius: 10px; background: color-mix(in srgb, #e0a030 15%, transparent); font-size: .85rem; }
+.import-errors p { margin: 2px 0; }
+.import-tpl { border-top: 1px solid var(--line); padding: 6px 0; }
+.import-tpl h3 { color: var(--text); font-size: .95rem; margin: 6px 0 4px; }
+.import-item { margin: 2px 0; font-size: .88rem; }
