@@ -76,7 +76,7 @@ async function main() {
   }
 }
 
-// 予定を6週間先まで用意する。
+// レール（予定）の準備：できなかった予定を後ろへずらし、6週間先まで用意する。
 // サーバーとつないでいて、まだ一度も同期していない端末では作らない（サーバーにある予定を上書きしないため）
 let ensuring = false;
 async function ensurePlans() {
@@ -85,8 +85,9 @@ async function ensurePlans() {
   ensuring = true;
   try {
     const before = store.version();
-    await plan.ensure(todayJst());
+    const moved = await plan.prepare(todayJst());
     if (store.version() !== before && route().name !== 'ex') render();
+    if (moved) toast('できなかった予定を、今日から先へずらしました（レールはそのまま続きます）');
   } finally {
     ensuring = false;
   }
@@ -149,12 +150,12 @@ function viewHome() {
         ${stat('総ボリューム', fmtInt(s.volume), 'kg')}
         ${stat('有酸素', fmtNum(s.minutes, 0) || 0, '分')}
       </section>
-      ${activeMenu(today) ? '' : missedCard(today)}
+      ${railCard(today)}
       ${menuCard(today)}
       ${counterCard(today)}
       ${partsCard(today, s)}
       ${todayCard(s)}
-      <a class="btn btn-wide" href="#/pick">＋ 種目を選んで記録</a>`
+      <a class="link-wide" href="#/pick">＋ レール以外の種目を記録する</a>`
   };
 }
 
@@ -196,38 +197,37 @@ function menuCard(today) {
       </div>
     </section>`;
   }
-  const list = templates();
-  const x = plan.planOn(today);
-  const st = x ? plan.status(x, today) : null;
-  const planned = x && (st === 'today' || st === 'done') ? store.get('templates', x.template_id) : null;
-  const others = list.filter(t => t !== planned);
-  const next = plan.plans().find(p => p.date > today && p.status !== 'skipped');
-  const nextTpl = next ? store.get('templates', next.template_id) : null;
-  return `<section class="card">
-    ${planned ? `<button class="btn btn-primary btn-wide" data-act="menu-start" data-id="${esc(planned.id)}">
-        ${esc(planned.name)} を始める<small>今日の予定</small></button>
-      <div class="plan-actions">
-        <button class="link" data-act="plan-postpone" data-date="${today}">あした以降にずらす</button>
-        <button class="link" data-act="plan-skip" data-date="${today}">今日はやめておく</button>
-      </div>`
-      : `<h2>${x && st === 'skipped' ? '今日の予定はお休みにしました' : '今日の予定はありません'}</h2>`}
-    <div class="chip-row">${others.map(t => `<button class="chip" data-act="menu-start" data-id="${esc(t.id)}">${esc(t.name)}</button>`).join('')}</div>
-    ${nextTpl ? `<p class="hint next-plan">次の予定：${esc(fmtDate(next.date))} ${esc(nextTpl.name)}</p>` : ''}
-  </section>`;
+  return '';
 }
 
-// 過ぎたのにまだの予定（責めずに、ずらすかやめるかを選べるように）
-function missedCard(today) {
-  const list = plan.missed(today);
-  if (!list.length) return '';
-  const x = list[0];
-  const tpl = store.get('templates', x.template_id);
-  return `<section class="card missed">
-    <p>${esc(fmtDate(x.date))} の <b>${esc(tpl.name)}</b> はまだです${list.length > 1 ? `<small>（ほか${list.length - 1}件）</small>` : ''}</p>
-    <div class="row-actions">
-      <button class="btn btn-primary" data-act="plan-postpone" data-date="${x.date}">後ろにずらす</button>
-      <button class="btn" data-act="plan-skip" data-date="${x.date}">やらない</button>
-    </div>
+// 今日のレール（筋トレ・有酸素）。選ばせずに、その日の分だけを出す
+function railCard(today) {
+  const active = activeMenu(today);
+  const rows = plan.LANES.map(lane => {
+    const x = plan.planOn(today, lane);
+    if (!x) return '';
+    const tpl = store.get('templates', x.template_id);
+    const done = plan.doneOn(today, lane);
+    const running = active && active.id === tpl.id;
+    const rain = lane === 'c' ? plan.rainAlternative(today) : null;
+    const note = (tpl.items || []).length === 1 && tpl.items[0].note ? tpl.items[0].note : '';
+    return `<div class="rail-row lane-${lane} ${done ? 'done' : ''}">
+      <div class="rail-head"><span class="rail-lane">${plan.LANE_LABEL[lane]}</span>${done ? '<span class="saved">✓ できた</span>' : running ? '<span class="hint">記録中</span>' : ''}</div>
+      ${running ? `<p class="rail-name">${esc(tpl.name)}</p>`
+        : `<button class="btn ${done ? '' : 'btn-primary'} btn-wide" data-act="menu-start" data-id="${esc(tpl.id)}">${esc(tpl.name)}${done ? '<small>続きを記録する</small>' : ' を始める'}</button>`}
+      ${note && !done ? `<p class="hint rail-note">${esc(note)}</p>` : ''}
+      ${done ? '' : `<div class="plan-actions">
+        <button class="link" data-act="plan-postpone" data-date="${today}" data-lane="${lane}">今日はできない（後ろにずらす）</button>
+        ${rain ? `<button class="link" data-act="plan-rain" data-id="${esc(rain)}">雨なので自転車に</button>` : ''}
+      </div>`}
+    </div>`;
+  }).join('');
+  const next = plan.nextPlans(today);
+  const nextText = next ? next.list.map(x => store.get('templates', x.template_id).name).join('・') : '';
+  return `<section class="card rail">
+    <h2>今日のレール</h2>
+    ${rows || '<p class="rail-rest">今日はお休みの日です。</p>'}
+    ${next ? `<p class="hint next-plan">次：${esc(fmtDate(next.date))} ${esc(nextText)}</p>` : '<p class="hint">「設定」→「予定の作り方」でレールを作れます。</p>'}
   </section>`;
 }
 
@@ -510,6 +510,15 @@ function viewHistory() {
   };
 }
 
+// カレンダーのマスに入る短い名前（「ラン：導入（歩き混ぜ）」→「🏃導入」）
+const EX_ICON = { 'ex-running': '🏃', 'ex-swim': '🏊', 'ex-bike': '🚴', 'ex-walk': '🚶' };
+function shortName(tpl) {
+  const first = (tpl.items || [])[0];
+  const icon = first && EX_ICON[first.exercise_id] ? EX_ICON[first.exercise_id] : '';
+  const name = icon ? tpl.name.split('：').pop().replace(/（.*?）|\(.*?\)/g, '') : tpl.name;
+  return icon + (name || tpl.name);
+}
+
 // 月のカレンダー（月曜始まり）。予定のメニュー名と、できた・まだ・やめたを表示する
 function calendar(month, today, selected) {
   const first = month + '-01';
@@ -520,36 +529,36 @@ function calendar(month, today, selected) {
   const days = calc.workoutDays();
   let cells = ['月', '火', '水', '木', '金', '土', '日'].map(d => `<span class="cal-wd">${d}</span>`).join('');
   for (let d = start; d <= end; d = addDays(d, 1)) {
-    const x = plan.planOn(d);
-    const st = x ? plan.status(x, today) : null;
-    const tpl = x ? store.get('templates', x.template_id) : null;
-    const mark = { done: '✓', missed: '!', skipped: '−' }[st] || '';
+    const chips = plan.LANES.map(lane => {
+      const x = plan.planOn(d, lane);
+      if (!x) return '';
+      const st = plan.status(x, today);
+      const mark = { done: '✓', missed: '!', skipped: '−' }[st] || '';
+      return `<span class="cal-chip lane-${lane} ${st}">${mark}${esc(shortName(store.get('templates', x.template_id)))}</span>`;
+    }).join('');
     cells += `<button class="cal-cell ${d.slice(0, 7) !== month ? 'out' : ''} ${d === today ? 'today' : ''} ${d === selected ? 'sel' : ''}" data-act="hist-day" data-date="${d}">
       <span class="cal-day">${Number(d.slice(8))}</span>
-      ${tpl ? `<span class="cal-chip ${st}">${mark}${esc(tpl.name)}</span>` : days.has(d) ? '<span class="cal-chip done">✓</span>' : ''}
+      ${chips || (days.has(d) ? '<span class="cal-chip done">✓</span>' : '')}
     </button>`;
   }
   return `<div class="cal">${cells}</div>`;
 }
 
-// その日の予定（ずらす・やめる・変える）
+// その日のレール（ずらす・変える）
 function planPanel(date, today) {
-  const x = plan.planOn(date);
-  const st = x ? plan.status(x, today) : null;
-  const tpl = x ? store.get('templates', x.template_id) : null;
-  const label = { done: 'できた', skipped: 'やめた', missed: 'まだ', today: '今日の予定', future: '予定' }[st];
-  const options = `<option value="">予定なし</option>` + templates().map(t => `<option value="${esc(t.id)}" ${x && x.template_id === t.id ? 'selected' : ''}>${esc(t.name)}</option>`).join('');
-  return `<div class="plan-panel">
-    <div class="plan-row">
-      <span class="plan-label">${tpl ? `<span class="cal-chip ${st}">${esc(label)}</span> ${esc(tpl.name)}` : '予定なし'}</span>
-      <select class="select plan-select" data-act-change="plan-set" data-date="${date}" aria-label="この日の予定を変える">${options}</select>
+  return `<div class="plan-panel">${plan.LANES.map(lane => {
+    const x = plan.planOn(date, lane);
+    const st = x ? plan.status(x, today) : null;
+    const tpl = x ? store.get('templates', x.template_id) : null;
+    const label = { done: 'できた', skipped: 'やめた', missed: 'まだ', today: '今日', future: '予定' }[st];
+    const options = '<option value="">なし</option>' + templates().map(t => `<option value="${esc(t.id)}" ${x && x.template_id === t.id ? 'selected' : ''}>${esc(t.name)}</option>`).join('');
+    return `<div class="plan-row lane-${lane}">
+      <span class="rail-lane">${plan.LANE_LABEL[lane]}</span>
+      <span class="plan-label">${tpl ? `<span class="cal-chip ${st}">${esc(label)}</span> ${esc(tpl.name)}` : '<span class="hint">なし</span>'}</span>
+      ${tpl && ['today', 'future'].includes(st) ? `<button class="link" data-act="plan-postpone" data-date="${date}" data-lane="${lane}">後ろにずらす</button>` : ''}
     </div>
-    ${tpl && ['today', 'future', 'missed'].includes(st) ? `<div class="row-actions">
-      <button class="btn" data-act="plan-postpone" data-date="${date}">後ろにずらす</button>
-      <button class="btn" data-act="plan-skip" data-date="${date}">やめる</button>
-    </div>` : ''}
-    ${st === 'skipped' ? `<button class="link" data-act="plan-unskip" data-date="${date}">「やめる」を取り消す</button>` : ''}
-  </div>`;
+    ${date >= today ? `<select class="select plan-select" data-act-change="plan-set" data-date="${date}" data-lane="${lane}" aria-label="${plan.LANE_LABEL[lane]}の予定を変える">${options}</select>` : ''}`;
+  }).join('')}</div>`;
 }
 
 function heatmap(today, days, selected) {
@@ -1009,23 +1018,36 @@ function viewTemplates() {
 // ---------- 予定の作り方（曜日ごとのメニュー） ----------
 
 function viewSchedule() {
-  if (!state.draft || state.draft.kind !== 'schedule') state.draft = { kind: 'schedule', pattern: { ...plan.pattern() } };
+  if (!state.draft || state.draft.kind !== 'schedule') state.draft = { kind: 'schedule', pattern: JSON.parse(JSON.stringify(plan.pattern())) };
   const p = state.draft.pattern;
   const list = templates();
   const order = [1, 2, 3, 4, 5, 6, 0];
-  const seq = order.filter(wd => p[wd] && store.get('templates', p[wd])).map(wd => store.get('templates', p[wd]).name);
+  const opts = (sel, lane) => `<option value="">−</option>` + list.map(t => `<option value="${esc(t.id)}" ${sel === t.id ? 'selected' : ''}>${esc(t.name)}</option>`).join('');
+  const table = stage => `<div class="sched-table">
+    <div class="sched-head"><span></span><span>筋トレ</span><span>有酸素</span></div>
+    ${order.map(wd => `<div class="sched-row"><span>${WEEKDAYS[wd]}</span>
+      <select class="select" data-sched="${stage}:${wd}:s" aria-label="${WEEKDAYS[wd]}曜の筋トレ">${opts(p[stage][wd].s, 's')}</select>
+      <select class="select" data-sched="${stage}:${wd}:c" aria-label="${WEEKDAYS[wd]}曜の有酸素">${opts(p[stage][wd].c, 'c')}</select></div>`).join('')}
+  </div>`;
+  const seqText = (stage, lane) => order.map(wd => p[stage][wd][lane]).filter(id => id && store.get('templates', id)).map(id => store.get('templates', id).name).join(' → ');
   return {
     title: '予定の作り方',
     back: '#/settings',
     tab: 'settings',
-    html: `<section class="card form">
-      <p class="hint">曜日ごとにメニューを決めると、6週間先までの予定がカレンダーに入ります。できなかった日は「後ろにずらす」で、その先の予定ごと1つずつ後ろにずれます。</p>
-      ${order.map(wd => `<label class="field sched-row"><span>${WEEKDAYS[wd]}曜</span>
-        <select class="select" data-sched="${wd}"><option value="">休み</option>${list.map(t => `<option value="${esc(t.id)}" ${p[wd] === t.id ? 'selected' : ''}>${esc(t.name)}</option>`).join('')}</select></label>`).join('')}
-      <p class="hint">ずらしたあとの順番：${seq.length ? esc(seq.join(' → ')) + ' → （くり返し）' : '（まだありません）'}</p>
-      <button class="btn btn-primary btn-wide" data-act="sched-save">この内容で今日から予定を作り直す</button>
-      <p class="hint">できた日・過ぎた日の予定はそのまま残ります。</p>
-    </section>`
+    html: `<p class="hint sched-lead">曜日ごとに筋トレと有酸素を決めると、6週間先までのレールがカレンダーに入ります。できなかった日の分は、次に開いたときに自動で後ろへずれます（先の予定も1つずつ）。</p>
+    <section class="card form">
+      <h2>はじめの期間</h2>
+      <label class="check"><input type="checkbox" data-sched-intro ${p.intro ? 'checked' : ''}> はじめの期間だけ別の曜日割りにする</label>
+      ${p.intro ? `<label class="field"><span>この日まで</span><input type="date" data-sched-until value="${esc(p.intro_until || '')}"></label>
+        ${table('intro')}` : ''}
+    </section>
+    <section class="card form">
+      <h2>${p.intro ? 'そのあと（いつもの曜日割り）' : 'いつもの曜日割り'}</h2>
+      ${table('main')}
+      <p class="hint">順番：筋トレ ${esc(seqText('main', 's') || '−')}／有酸素 ${esc(seqText('main', 'c') || '−')}（くり返し）</p>
+    </section>
+    <button class="btn btn-primary btn-wide" data-act="sched-save">この内容で今日からレールを作り直す</button>
+    <p class="hint">できた日・過ぎた日の予定はそのまま残ります。</p>`
   };
 }
 
@@ -1215,24 +1237,21 @@ async function onClick(e) {
       break;
     }
     case 'plan-postpone': {
-      const x = plan.planOn(d.date);
+      const lane = d.lane || 's';
+      const x = plan.planOn(d.date, lane);
       if (!x) return;
       const name = store.get('templates', x.template_id).name;
-      if (!confirm(`${fmtDate(d.date)}の「${name}」を次の運動日にずらし、そのあとの予定も1つずつ後ろにずらします。よろしいですか？`)) return;
-      const n = await plan.postpone(d.date, todayJst());
+      if (!confirm(`${fmtDate(d.date)}の「${name}」を次の${plan.LANE_LABEL[lane]}の日にずらし、その先の予定も1つずつ後ろにずらします。よろしいですか？`)) return;
+      const n = await plan.postpone(d.date, lane, todayJst());
       await plan.ensure(todayJst());
       render();
       toast(n ? 'この日から先の予定を、1つずつ後ろにずらしました' : 'ずらせる予定がありませんでした');
       break;
     }
-    case 'plan-skip':
-      await plan.skip(d.date);
+    case 'plan-rain':
+      await plan.setPlan(todayJst(), 'c', d.id);
       render();
-      toast('この日の予定をやめました（ほかの予定はそのまま）');
-      break;
-    case 'plan-unskip':
-      await plan.unskip(d.date);
-      render();
+      toast('今日の有酸素を自転車に替えました');
       break;
     case 'hist-move': {
       const next = addDays(state.histDate || todayJst(), Number(d.d));
@@ -1333,7 +1352,10 @@ async function onClick(e) {
     case 'tpl-save': await saveTemplate(); break;
     case 'sched-save': {
       if (!confirm('今日以降のまだの予定を、この内容で作り直します。よろしいですか？')) return;
-      await plan.savePattern(state.draft.pattern);
+      if (state.draft.pattern.intro && !state.draft.pattern.intro_until) return toast('はじめの期間の終わりの日を入れてください');
+      const pt = state.draft.pattern;
+      if (pt.intro && !pt.intro_until) return toast('はじめの期間の終わりの日を入れてください');
+      await plan.savePattern(pt);
       await plan.rebuild(todayJst());
       state.draft = null;
       location.hash = '#/history';
@@ -1398,14 +1420,28 @@ function onInput(e) {
     else if (ds.export === 'from') state.exportFrom = el.value;
     else state.exportTo = el.value;
   } else if (ds.sched !== undefined) {
-    state.draft.pattern[ds.sched] = el.value || null;
+    const [stage, wd, lane] = ds.sched.split(':');
+    state.draft.pattern[stage][wd][lane] = el.value || null;
     if (e.type === 'change') render();
+  } else if (ds.schedIntro !== undefined) {
+    if (e.type !== 'change') return;
+    const pt = state.draft.pattern;
+    if (el.checked) {
+      pt.intro = JSON.parse(JSON.stringify(pt.main));
+      pt.intro_until = addDays(todayJst(), 13);
+    } else {
+      pt.intro = null;
+      pt.intro_until = null;
+    }
+    render();
+  } else if (ds.schedUntil !== undefined) {
+    state.draft.pattern.intro_until = el.value || null;
   } else if (ds.tplItem !== undefined) {
     const it = state.draft.items[Number(ds.tplItem)];
     if (ds.k === 'note') it.note = el.value;
     else it[ds.k] = parseNum(el.value);
   } else if (ds.actChange === 'plan-set' && e.type === 'change') {
-    plan.setPlan(ds.date, el.value || null).then(() => { render(); toast('予定を変えました'); });
+    plan.setPlan(ds.date, ds.lane || 's', el.value || null).then(() => { render(); toast('予定を変えました'); });
   } else if (ds.actChange === 'trend-ex' && e.type === 'change') {
     state.trendEx = el.value;
     state.trendMetric = null;
