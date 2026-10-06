@@ -246,13 +246,59 @@ function exCard(ex, it, lane, today) {
     </div>
     <div class="ex-card-target">${esc(target.targetText(ex, t))}</div>
     ${t.reason ? `<div class="ex-card-reason">${esc(t.reason)}</div>` : ''}
-    ${it.note ? `<p class="ex-card-note">${esc(it.note)}</p>` : ''}
+    ${it.note ? noteHtml(ex.id, it.note) : ''}
     ${pg.logs.length ? `<div class="ex-card-logs">記録：${pg.logs.map(l => esc(setText(l, ex))).join('、')}</div>` : ''}
     <div class="ex-card-actions">
       ${pg.complete ? '' : `<button class="btn btn-primary" data-act="card-done" data-ex="${esc(ex.id)}">${pg.logs.length ? '残りを目標どおりに' : '目標どおりできた'}</button>`}
       <a class="btn" href="#/ex/${esc(ex.id)}">${pg.complete ? '直す・追加' : '数値で記録'}</a>
     </div>
   </div>`;
+}
+
+// メニューのメモを手順に分ける：「A → B → C。注意1。注意2」→ 手順 [A, B, C] と注意 [注意1, 注意2]
+// 手順が2つ以上（→ がある）ときだけ分ける。（ ）の中の「。」では切らない
+function noteSteps(note) {
+  const parts = String(note || '').split('→').map(x => x.trim()).filter(Boolean);
+  if (parts.length < 2) return null;
+  const last = parts[parts.length - 1];
+  let depth = 0;
+  let cut = -1;
+  for (let i = 0; i < last.length; i++) {
+    const c = last[i];
+    if (c === '（' || c === '(') depth++;
+    else if (c === '）' || c === ')') depth = Math.max(0, depth - 1);
+    else if (c === '。' && depth === 0) { cut = i; break; }
+  }
+  let tips = [];
+  if (cut >= 0) {
+    tips = last.slice(cut + 1).split('。').map(x => x.trim()).filter(Boolean);
+    parts[parts.length - 1] = last.slice(0, cut).trim();
+  }
+  return { steps: parts, tips };
+}
+
+// 手順のチェック（その日だけ・この端末だけ。記録には入らない目印）
+function stepState(today) {
+  const st = load('wo.steps', null);
+  return st && st.date === today ? st : { date: today, map: {} };
+}
+
+// メモの表示：手順があれば小さなカードを縦に並べる（タップで ✓）。無ければそのまま
+function noteHtml(exId, note) {
+  const ns = noteSteps(note);
+  if (!ns) return `<p class="ex-card-note">${esc(note)}</p>`;
+  const done = stepState(todayJst()).map[exId] || [];
+  return `<ol class="step-list">${ns.steps.map((x, i) => {
+    const k = x.search(/[（(]/);
+    const main = k > 0 ? x.slice(0, k) : x;
+    const sub = k > 0 ? x.slice(k) : '';
+    const on = done.includes(i);
+    return `<li><button class="step-card ${on ? 'done' : ''}" data-act="step-toggle" data-ex="${esc(exId)}" data-i="${i}" aria-pressed="${on}">
+      <span class="step-no">${on ? '✓' : i + 1}</span>
+      <span class="step-text"><b>${esc(main)}</b>${sub ? `<small>${esc(sub)}</small>` : ''}</span>
+    </button></li>`;
+  }).join('')}</ol>
+  ${ns.tips.length ? `<ul class="step-tips">${ns.tips.map(t => `<li>${esc(t)}</li>`).join('')}</ul>` : ''}`;
 }
 
 // 今日のレールの中から、その種目のメニュー項目を探す
@@ -434,7 +480,7 @@ function viewEntry(exId) {
       <span>メニュー ${todaySets.length}/${item.sets} セット${done ? ' ✓' : ''}</span>
       ${done && next ? `<a class="btn btn-small" href="#/ex/${esc(next.exercise_id)}">次：${esc(store.get('exercises', next.exercise_id).name)} ›</a>` : ''}
       ${done && !next ? '<a class="btn btn-small" href="#/home">メニュー完了 ›</a>' : ''}
-    </div>${item.note ? `<p class="menu-note">${esc(item.note)}</p>` : ''}`;
+    </div>${item.note ? noteHtml(exId, item.note) : ''}`;
   }
 
   return {
@@ -1373,6 +1419,18 @@ async function onClick(e) {
     }
     case 'record': await record(d.ex); break;
     case 'card-done': await cardDone(d.ex); break;
+    case 'step-toggle': {
+      const st = stepState(todayJst());
+      const list = st.map[d.ex] || [];
+      const i = Number(d.i);
+      st.map[d.ex] = list.includes(i) ? list.filter(x => x !== i) : [...list, i];
+      save('wo.steps', st);
+      const on = st.map[d.ex].includes(i);
+      el.classList.toggle('done', on);
+      el.setAttribute('aria-pressed', String(on));
+      el.querySelector('.step-no').textContent = on ? '✓' : String(i + 1);
+      break;
+    }
     case 'cfg-set': {
       const c = state.draft.cfg;
       c[d.k] = /^\d+$/.test(d.v) ? Number(d.v) : d.v;
