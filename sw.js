@@ -19,6 +19,7 @@ const SHELL_FILES = [
   './js/charts.js',
   './js/plan.js',
   './js/menuio.js',
+  './js/target.js',
   './js/export.js',
   './js/seed.js',
   './js/util.js',

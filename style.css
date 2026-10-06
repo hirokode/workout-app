@@ -664,3 +664,42 @@ textarea {
 .import-tpl { border-top: 1px solid var(--line); padding: 6px 0; }
 .import-tpl h3 { color: var(--text); font-size: .95rem; margin: 6px 0 4px; }
 .import-item { margin: 2px 0; font-size: .88rem; }
+
+/* ---------- 今日のカード ---------- */
+
+.lane-card .card-head h2 { display: flex; align-items: center; gap: 6px; font-size: 1.02rem; }
+.rail-progress { font-weight: 700; color: var(--muted); font-variant-numeric: tabular-nums; }
+.lane-card.all-done .rail-progress { color: var(--done); }
+.ex-card {
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 12px;
+  margin-top: 10px;
+  background: var(--card);
+}
+.ex-card.done { background: color-mix(in srgb, var(--done) 8%, var(--card)); border-color: color-mix(in srgb, var(--done) 35%, var(--line)); }
+.ex-card-head { display: flex; align-items: center; gap: 8px; }
+.ex-card-name { flex: 1; font-weight: 700; }
+.ex-card-count { font-variant-numeric: tabular-nums; color: var(--muted); font-weight: 600; }
+.ex-card.done .ex-card-count { color: var(--done); }
+.ex-card-target { font-size: 1.25rem; font-weight: 700; margin: 6px 0 0; font-variant-numeric: tabular-nums; }
+.ex-card.done .ex-card-target { font-size: 1rem; color: var(--muted); }
+.ex-card-reason { font-size: .75rem; color: var(--accent); margin-top: 2px; }
+.ex-card-note { margin: 6px 0 0; font-size: .8rem; color: var(--muted); white-space: pre-wrap; }
+.ex-card-logs { margin-top: 6px; font-size: .8rem; color: var(--muted); font-variant-numeric: tabular-nums; }
+.ex-card-actions { display: grid; grid-template-columns: 2fr 1fr; gap: 8px; margin-top: 10px; }
+.ex-card.done .ex-card-actions { grid-template-columns: 1fr; }
+.ex-card-actions .btn { min-height: 52px; padding: 8px; white-space: nowrap; }
+
+/* プラン */
+.switch { display: inline-flex; align-items: center; gap: 8px; font-weight: 600; min-height: var(--tap); }
+.switch input { width: 44px; height: 26px; appearance: none; -webkit-appearance: none; border-radius: 13px; background: var(--line); position: relative; transition: background .15s; }
+.switch input::after { content: ''; position: absolute; top: 3px; left: 3px; width: 20px; height: 20px; border-radius: 50%; background: #fff; transition: left .15s; box-shadow: 0 1px 2px rgba(0,0,0,.2); }
+.switch input:checked { background: var(--accent); }
+.switch input:checked::after { left: 21px; }
+.week-row { display: flex; gap: 12px; padding: 6px 0; border-top: 1px solid var(--line); font-size: .92rem; }
+.week-row:first-of-type { border-top: 0; }
+.week-row b { width: 1.5em; text-align: center; }
+.target-row { display: flex; justify-content: space-between; gap: 8px; padding: 5px 0; border-top: 1px solid var(--line); font-size: .88rem; }
+.target-row span:last-child { font-weight: 600; text-align: right; font-variant-numeric: tabular-nums; }
+.modal-body textarea { width: 100%; font-size: .8rem; }
