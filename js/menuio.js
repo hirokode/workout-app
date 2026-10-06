@@ -31,7 +31,7 @@ const EXAMPLE = {
 // 別の AI に渡す依頼文（種目の一覧は、今アプリにあるものを入れる）
 export function buildPrompt() {
   const exs = store.all('exercises').filter(e => e.active).sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0));
-  const list = exs.map(e => `- ${e.name}（${TYPE_LABEL[e.type] || e.type}・${String(e.parts || '').split(',').join('・')}）`).join('\n');
+  const list = exs.map(e => `- ${e.name}（${TYPE_LABEL[e.type] || e.type}${e.type === 'cardio' ? '' : '・' + String(e.parts || '').split(',').join('・')}）`).join('\n');
   return `あなたはトレーニングと有酸素運動にくわしいコーチです。私のワークアウト記録アプリに取り込む「定型メニュー」を作ってください。
 
 【私について】（わかる範囲で書き換えてください）
