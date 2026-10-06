@@ -114,7 +114,9 @@ export function parse(text) {
         sets: num(it.sets, 1, 10) || (type === 'cardio' ? 1 : 3),
         note: String(it.note || '').trim().slice(0, 200),
         duration_min: num(it.duration_min, 1, 600),
-        distance_km: num(it.distance_km, 0.01, 100)
+        distance_km: num(it.distance_km, 0.01, 100),
+        reps: type === 'cardio' ? null : num(it.reps, 1, 50),
+        weight: type === 'strength' ? num(it.weight, 0, 500) : null
       });
     });
     if (!items.length) { errors.push(`「${name}」に種目がありません`); return; }
@@ -134,11 +136,17 @@ export async function apply(parsed) {
       newEx.set(it.name, {
         id: uuid(), name: it.name, type: it.type, parts: it.part,
         step: it.type === 'strength' ? 2.5 : it.type === 'bodyweight' ? 1 : 0.5,
-        initial_weight: null, per_hand: false, sort_order: order, active: true
+        initial_weight: it.weight, per_hand: false, sort_order: order, active: true
       });
     }
   }));
   if (newEx.size) await store.putMany('exercises', [...newEx.values()]);
+  // 開始の重さ（weight）は、種目の「初期重量の目安」に入れる（記録が無い種目の今日の目標になる）
+  const weightUpd = new Map();
+  parsed.templates.forEach(t => t.items.forEach(it => {
+    if (it.exercise && it.weight != null && it.exercise.initial_weight !== it.weight) weightUpd.set(it.exercise.id, { ...it.exercise, initial_weight: it.weight });
+  }));
+  if (weightUpd.size) await store.putMany('exercises', [...weightUpd.values()]);
   let tOrder = Math.max(0, ...store.all('templates').map(t => t.sort_order || 0));
   const rows = parsed.templates.map(t => {
     const items = t.items.map(it => {
@@ -146,6 +154,7 @@ export async function apply(parsed) {
       if (it.note) o.note = it.note;
       if (it.duration_min) o.duration_min = it.duration_min;
       if (it.distance_km) o.distance_km = it.distance_km;
+      if (it.reps) o.reps = it.reps;
       return o;
     });
     if (t.existing) return { ...t.existing, items };
@@ -154,4 +163,61 @@ export async function apply(parsed) {
   });
   await store.putMany('templates', rows);
   return { templates: rows.length, exercises: newEx.size };
+}
+
+// 筋トレのメニューと今日の目標を AI に確認してもらう依頼文。
+// rows：[{ name, items: [{ name, type, sets, reps, weight, per_hand, reason }] }]（プラン設定の今の分け方と、自動で出した目標）
+export function buildStrengthPrompt(cfg, rows, cardioText) {
+  const v = x => (x === null || x === undefined || x === '' ? '（未入力）' : x);
+  const menus = rows.map(r => `■ ${r.name}\n` + r.items.map(it => `- ${it.name}：${it.type === 'bodyweight' ? `${it.reps}回` : `${it.weight}kg${it.per_hand ? '（片手）' : ''} × ${it.reps}回`} × ${it.sets}セット（${it.reason}）`).join('\n')).join('\n');
+  const exs = store.all('exercises').filter(e => e.active && e.type !== 'cardio').sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0));
+  const list = exs.map(e => `- ${e.name}（${TYPE_LABEL[e.type]}・${String(e.parts || '').split(',').join('・')}${e.per_hand ? '・片手の重さで記録' : ''}）`).join('\n');
+  return `あなたは筋力トレーニングにくわしいコーチです。私のワークアウト記録アプリが自動で出した「筋トレのメニューと開始の重さ」が妥当か確認し、必要なら直してください。
+
+【私について】（わかる範囲で書き換えてください）
+- 年齢・性別：
+- 身長：
+- 体重：${v(cfg.body_weight)}kg
+- ベンチプレスの最大（1回）：${v(cfg.bench_max)}kg
+- スクワットの最大（1回）：${v(cfg.squat_max)}kg
+- 懸垂の最大回数：${v(cfg.pullup_max)}回
+- 運動歴：
+- 目的：血圧の改善（最優先）／体重を月+0.5kgペースで増やし、体脂肪率を保ったまま筋肉をつける
+
+【頻度】
+- 筋トレ：週${cfg.s_freq}回
+- 有酸素：${cardioText}
+
+【守ってほしい条件】
+- 家庭血圧が高め（目安 135/85 を超えている）で、受診予定です。血圧が上がりやすい追い込み方は避けてください
+- 全種目で息を止めない（上げるときに吐く）
+- 「あと2回いけそう」で止める。1〜3回しか上がらない高重量やMAX測定は入れない
+- 重さの上げ方は「前回、目標の回数を全セットこなせたら次回1段階上げる」で自動にしています
+
+【アプリが出した今のメニューと開始の重さ】
+${menus}
+
+【アプリにある種目】（この名前をそのまま使ってください）
+${list}
+
+【出力のしかた】
+はじめに、直したところとその理由を短く書いてください（直す必要がなければ「このままでよい」と書いてください）。
+そのあと、アプリに貼り付ける JSON を1つのコードブロックで出してください。
+- JSON はコメント・末尾カンマなしの厳密な形式
+- name：メニューの名前（上の ■ の名前をそのまま使うと、そのメニューが置き換わります）
+- exercise：種目の名前（上の一覧の名前をそのまま）
+- type：strength（重量×回数）／bodyweight（自重）
+- part：胸・背中・肩・腕・脚・体幹 のどれか
+- sets：セット数／reps：目標の回数
+- weight：開始の重さ（kg、筋トレのみ。片手の種目は片手の重さ）
+- note：注意点があれば（80文字以内）
+- weekday：null のまま
+
+{
+  "templates": [
+    { "name": "上半身A", "weekday": null,
+      "items": [ { "exercise": "ベンチプレス", "type": "strength", "part": "胸", "sets": 3, "reps": 10, "weight": 30 } ] }
+  ]
+}
+`;
 }

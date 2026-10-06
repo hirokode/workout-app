@@ -4,7 +4,7 @@
 
 export const SEED_TS = '2026-01-01T00:00:00.000+09:00';
 // 初期データの版。足したら上げる（端末にまだ無い ID の分だけ追加される）
-export const SEED_VERSION = 3;
+export const SEED_VERSION = 4;
 
 export const PARTS = ['胸', '背中', '肩', '腕', '脚', '体幹', '有酸素'];
 
@@ -47,7 +47,14 @@ const TEMPLATES = [
   ['tpl-run-long', 'ラン：週末ロング', null, [['ex-running', 1, '早歩き5分 → 6:30/kmで40〜45分 → 早歩き5分。最初は35分から始め、毎週5分ずつ延ばす。標準より遅くてよい。途中で歩いてもよい', 55, 7.8]]],
   ['tpl-swim-basic', 'スイム：基礎', null, [['ex-swim', 1, '水中歩行5分 → クロール25m×8（2かきごとに息継ぎ、水中では鼻から吐き続ける。1本ごとに40秒休み）→ 平泳ぎでゆっくり25m×4 → 水中歩行5分。泳いだ後すぐシャワー・保湿', 35, 0.3]]],
   ['tpl-swim-long', 'スイム：少し長め', null, [['ex-swim', 1, '水中歩行5分 → クロール25m×4（各30秒休み）→ 50m×3（各60秒休み。きつければ25m×2に）→ 平泳ぎ25m×4 → 水中歩行5分。2かきごとに息継ぎ。泳いだ後すぐシャワー・保湿', 45, 0.35]]],
-  ['tpl-bike-rain', '自転車：雨の日', null, [['ex-bike', 1, 'エアロバイク。軽め5分 → 会話できる強度（心拍130〜145）で30分 → 軽め5分。ペダルの回転は一定に。立ちこぎ・全力の区間は入れない', 40, null]]]
+  ['tpl-bike-rain', '自転車：雨の日', null, [['ex-bike', 1, 'エアロバイク。軽め5分 → 会話できる強度（心拍130〜145）で30分 → 軽め5分。ペダルの回転は一定に。立ちこぎ・全力の区間は入れない', 40, null]]],
+  // 版4で追加：筋トレの頻度ごとの分け方（週2＝全身A/B、週4＝上下×2、週5・6＝押す・引く・脚）。6番目は目標の回数
+  ['tpl-full-a', '全身A', null, [['ex-squat', 3], ['ex-bench', 3], ['ex-latpull', 3], ['ex-db-shoulder', 2], ['ex-leg-raise', 2]]],
+  ['tpl-full-b', '全身B', null, [['ex-rdl', 3], ['ex-incline-db', 3], ['ex-onearm-row', 3], ['ex-pullup', 2, '', null, null, 4], ['ex-ab-roller', 2]]],
+  ['tpl-lower-b', '下半身B', null, [['ex-leg-press', 4], ['ex-rdl', 3], ['ex-calf-raise', 3], ['ex-ab-roller', 3]]],
+  ['tpl-push', 'プッシュ（押す）', null, [['ex-bench', 4], ['ex-incline-db', 3], ['ex-db-shoulder', 3], ['ex-side-raise', 3], ['ex-dips', 2]]],
+  ['tpl-pull', 'プル（引く）', null, [['ex-latpull', 4], ['ex-onearm-row', 3], ['ex-pullup', 3, '', null, null, 4], ['ex-leg-raise', 3]]],
+  ['tpl-legs', '脚', null, [['ex-squat', 4], ['ex-rdl', 3], ['ex-leg-press', 3], ['ex-calf-raise', 3], ['ex-ab-roller', 3]]]
 ];
 
 // 版2で入れた仮の有酸素メニュー。版3のメニューに置き換えたので、手を加えていなければ消す
@@ -70,8 +77,9 @@ export function seedExercises() {
 export function seedTemplates() {
   return TEMPLATES.map(([id, name, wd, items], i) => ({
     id, name, weekday: wd,
-    items: items.map(([exercise_id, sets, note, duration_min, distance_km]) => {
+    items: items.map(([exercise_id, sets, note, duration_min, distance_km, reps]) => {
       const it = { exercise_id, sets };
+      if (reps) it.reps = reps;
       if (note) it.note = note;
       if (duration_min) it.duration_min = duration_min;
       if (distance_km) it.distance_km = distance_km;

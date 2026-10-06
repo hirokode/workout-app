@@ -8,6 +8,7 @@ import * as calc from './calc.js';
 import * as charts from './charts.js';
 import * as plan from './plan.js';
 import * as menuio from './menuio.js';
+import * as target from './target.js';
 import { toCsv, toPng, shareOrDownload } from './export.js';
 import { APP_VERSION } from './version.js';
 import { PULLUP_ID } from './seed.js';
@@ -132,7 +133,7 @@ function renderSyncPill(s) {
 const TABS = [['home', '今日', '🏋️'], ['history', 'カレンダー', '📅'], ['trends', '推移', '📈'], ['body', '体調', '❤️'], ['settings', '設定', '⚙️']];
 
 function renderTabbar(active) {
-  const tab = active === 'ex' || active === 'pick' ? 'home' : ['schedule', 'import'].includes(active) ? 'settings' : active;
+  const tab = active === 'ex' || active === 'pick' ? 'home' : ['schedule', 'import', 'plan'].includes(active) ? 'settings' : active;
   document.getElementById('tabbar').innerHTML = TABS.map(([id, label, icon]) =>
     `<a href="#/${id}" class="tab ${tab === id ? 'active' : ''}"><span class="tab-icon" aria-hidden="true">${icon}</span>${label}</a>`).join('');
 }
@@ -151,7 +152,6 @@ function viewHome() {
         ${stat('有酸素', fmtNum(s.minutes, 0) || 0, '分')}
       </section>
       ${railCard(today)}
-      ${menuCard(today)}
       ${counterCard(today)}
       ${partsCard(today, s)}
       ${todayCard(s)}
@@ -200,35 +200,100 @@ function menuCard(today) {
   return '';
 }
 
-// 今日のレール（筋トレ・有酸素）。選ばせずに、その日の分だけを出す
+// 今日のレール（筋トレ・有酸素）。選ばせずに、その日の分だけを種目ごとのカードで出す
 function railCard(today) {
-  const active = activeMenu(today);
-  const rows = plan.LANES.map(lane => {
+  const lanes = plan.LANES.map(lane => {
     const x = plan.planOn(today, lane);
     if (!x) return '';
     const tpl = store.get('templates', x.template_id);
-    const done = plan.doneOn(today, lane);
-    const running = active && active.id === tpl.id;
+    const items = (tpl.items || []).map(it => ({ it, ex: store.get('exercises', it.exercise_id) })).filter(o => o.ex);
+    const doneCount = items.filter(o => itemProgress(o.ex, o.it, today).complete).length;
+    const started = plan.doneOn(today, lane);
     const rain = lane === 'c' ? plan.rainAlternative(today) : null;
-    const note = (tpl.items || []).length === 1 && tpl.items[0].note ? tpl.items[0].note : '';
-    return `<div class="rail-row lane-${lane} ${done ? 'done' : ''}">
-      <div class="rail-head"><span class="rail-lane">${plan.LANE_LABEL[lane]}</span>${done ? '<span class="saved">✓ できた</span>' : running ? '<span class="hint">記録中</span>' : ''}</div>
-      ${running ? `<p class="rail-name">${esc(tpl.name)}</p>`
-        : `<button class="btn ${done ? '' : 'btn-primary'} btn-wide" data-act="menu-start" data-id="${esc(tpl.id)}">${esc(tpl.name)}${done ? '<small>続きを記録する</small>' : ' を始める'}</button>`}
-      ${note && !done ? `<p class="hint rail-note">${esc(note)}</p>` : ''}
-      ${done ? '' : `<div class="plan-actions">
+    return `<section class="card lane-card lane-${lane} ${doneCount === items.length ? 'all-done' : ''}">
+      <div class="card-head"><h2><span class="rail-lane">${plan.LANE_LABEL[lane]}</span> ${esc(tpl.name)}</h2>
+        <span class="rail-progress">${doneCount === items.length ? '✓ ' : ''}${doneCount}/${items.length}</span></div>
+      ${items.map(o => exCard(o.ex, o.it, lane, today)).join('')}
+      ${started ? '' : `<div class="plan-actions">
         <button class="link" data-act="plan-postpone" data-date="${today}" data-lane="${lane}">今日はできない（後ろにずらす）</button>
         ${rain ? `<button class="link" data-act="plan-rain" data-id="${esc(rain)}">雨なので自転車に</button>` : ''}
       </div>`}
-    </div>`;
+    </section>`;
   }).join('');
   const next = plan.nextPlans(today);
   const nextText = next ? next.list.map(x => store.get('templates', x.template_id).name).join('・') : '';
-  return `<section class="card rail">
-    <h2>今日のレール</h2>
-    ${rows || '<p class="rail-rest">今日はお休みの日です。</p>'}
-    ${next ? `<p class="hint next-plan">次：${esc(fmtDate(next.date))} ${esc(nextText)}</p>` : '<p class="hint">「設定」→「予定の作り方」でレールを作れます。</p>'}
-  </section>`;
+  return `${lanes || '<section class="card"><h2>今日はお休みの日です</h2></section>'}
+    ${next ? `<p class="hint next-plan">次のレール：${esc(fmtDate(next.date))} ${esc(nextText)}</p>` : '<p class="hint next-plan">「設定」→「プラン」でレールを作れます。</p>'}`;
+}
+
+// 今日のその種目の進み具合（筋トレ＝目標のセット数、有酸素＝1回）
+function itemProgress(ex, it, today) {
+  const logs = calc.exerciseLogs(ex.id).filter(l => l.date === today);
+  const goal = ex.type === 'cardio' ? 1 : (it.sets || 1);
+  return { logs, goal, complete: logs.length >= goal };
+}
+
+// 種目のカード：今日の目標と、「目標どおりできた」（1タップで全部記録）・「数値を入れる」
+function exCard(ex, it, lane, today) {
+  const t = target.targetFor(ex, it, today);
+  const pg = itemProgress(ex, it, today);
+  const unit = ex.type === 'cardio' ? '' : 'セット';
+  return `<div class="ex-card ${pg.complete ? 'done' : ''}">
+    <div class="ex-card-head">
+      <span class="part-dot p-${PARTS.indexOf(calc.partsOf(ex)[0])}"></span>
+      <span class="ex-card-name">${esc(ex.name)}</span>
+      <span class="ex-card-count">${pg.complete ? '✓ ' : ''}${pg.logs.length}/${pg.goal}${unit}</span>
+    </div>
+    <div class="ex-card-target">${esc(target.targetText(ex, t))}</div>
+    ${t.reason ? `<div class="ex-card-reason">${esc(t.reason)}</div>` : ''}
+    ${it.note ? `<p class="ex-card-note">${esc(it.note)}</p>` : ''}
+    ${pg.logs.length ? `<div class="ex-card-logs">記録：${pg.logs.map(l => esc(setText(l, ex))).join('、')}</div>` : ''}
+    <div class="ex-card-actions">
+      ${pg.complete ? '' : `<button class="btn btn-primary" data-act="card-done" data-ex="${esc(ex.id)}">${pg.logs.length ? '残りを目標どおりに' : '目標どおりできた'}</button>`}
+      <a class="btn" href="#/ex/${esc(ex.id)}">${pg.complete ? '直す・追加' : '数値で記録'}</a>
+    </div>
+  </div>`;
+}
+
+// 今日のレールの中から、その種目のメニュー項目を探す
+function todayItem(exId, today) {
+  for (const lane of plan.LANES) {
+    const x = plan.planOn(today, lane);
+    const tpl = x && store.get('templates', x.template_id);
+    const it = tpl && (tpl.items || []).find(i => i.exercise_id === exId);
+    if (it) return { tpl, item: it, lane };
+  }
+  const menu = activeMenu(today);
+  const it = menu && (menu.items || []).find(i => i.exercise_id === exId);
+  return it ? { tpl: menu, item: it, lane: null } : null;
+}
+
+// 「目標どおりできた」：残りのセットを目標の値でまとめて記録する
+async function cardDone(exId) {
+  const today = todayJst();
+  const ex = calc.exercise(exId);
+  const found = todayItem(exId, today);
+  if (!ex || !found) return;
+  const t = target.targetFor(ex, found.item, today);
+  const pg = itemProgress(ex, found.item, today);
+  const n = Math.max(0, pg.goal - pg.logs.length);
+  if (!n) return;
+  const logs = Array.from({ length: n }, (_, i) => ({
+    id: uuid(), date: today, exercise_id: exId, kind: 'normal', set_no: pg.logs.length + i + 1,
+    weight: ex.type === 'strength' ? t.weight : null,
+    reps: ex.type === 'cardio' ? null : t.reps,
+    added_weight: ex.type === 'bodyweight' ? (t.added || null) : null,
+    duration_min: ex.type === 'cardio' ? t.duration : null,
+    distance_km: ex.type === 'cardio' ? t.distance : null,
+    calories: null, memo: ''
+  }));
+  for (const l of logs) await store.put('logs', l);
+  state.undo = { ids: logs.map(l => l.id) };
+  const prs = calc.newRecords(logs[logs.length - 1]);
+  render();
+  const text = `${ex.name}：${target.targetText(ex, { ...t, sets: n })}`;
+  if (prs.length) toast(`<span class="pr-badge">PR</span> 自己ベスト更新！ ${prs.map(p => `${esc(p.label)} ${fmtNum(p.value)}${esc(p.unit)}`).join('・')}`, { undo: true, pr: true, html: true });
+  else toast(`記録しました（${esc(text)}）`, { undo: true, html: true });
 }
 
 function counterCard(today) {
@@ -320,6 +385,11 @@ function initialInputs(ex, today, item) {
   if (ex.type === 'cardio' && item && (item.duration_min || item.distance_km)) {
     return { date: today, weight: null, reps: null, added: null, duration: item.duration_min || null, distance: item.distance_km || null, calories: null };
   }
+  if (ex.type !== 'cardio') {
+    // 今日の目標（前回クリアなら1段階上）を最初の値にする
+    const t = target.targetFor(ex, item, today);
+    return { date: today, weight: ex.type === 'strength' ? t.weight : null, reps: t.reps, added: ex.type === 'bodyweight' ? (t.added || 0) : null, duration: null, distance: null, calories: null };
+  }
   const prev = calc.previousSession(ex.id, today);
   if (prev) return { date: today, ...fromLog(prev.sets[0]) };
   return {
@@ -341,8 +411,9 @@ function viewEntry(exId) {
   const ex = calc.exercise(exId);
   if (!ex) return { title: '見つかりません', back: '#/home', html: '<p class="hint">この種目は見つかりません。</p>' };
   const today = todayJst();
-  const menu = activeMenu(today);
-  const item = menu && (menu.items || []).find(it => it.exercise_id === exId);
+  const found = todayItem(exId, today);
+  const menu = found ? found.tpl : null;
+  const item = found ? found.item : null;
   if (!state.inputs[exId] || state.inputs[exId].date !== today) state.inputs[exId] = initialInputs(ex, today, item);
   const v = state.inputs[exId];
   const todaySets = calc.exerciseLogs(exId).filter(l => l.date === today);
@@ -890,7 +961,8 @@ function viewSettings() {
         <p class="hint">URL と合言葉はこの端末にだけ保存されます（GitHub には入りません）。</p>
       </section>
       <section class="card">
-        <a class="nav-line" href="#/schedule">予定の作り方（曜日ごとのメニュー） ›</a>
+        <a class="nav-line" href="#/plan">プラン（頻度・有酸素・目標の計算） ›</a>
+        <a class="nav-line" href="#/schedule">曜日割りを手で調整する ›</a>
         <a class="nav-line" href="#/templates">メニュー（テンプレート）の管理 ›</a>
         <a class="nav-line" href="#/import">AI にメニューを作ってもらう ›</a>
         <a class="nav-line" href="#/exercises">種目の管理 ›</a>
@@ -1051,6 +1123,90 @@ function viewSchedule() {
   };
 }
 
+// ---------- プラン（頻度・有酸素・パラメータ） ----------
+
+const C_TYPE_LABEL = { run: 'ランニング', swim: '水泳', both: '両方（水泳は週1）' };
+
+function cardioText(cfg) {
+  return cfg.c_on ? `週${cfg.c_freq}回（${C_TYPE_LABEL[cfg.c_type]}）` : 'なし';
+}
+
+// 今の分け方のメニューと、自動で出した目標（画面の目安表と、AI への依頼文で使う）
+function splitRows(cfg, today) {
+  const ids = [...new Set(plan.S_SPLITS[cfg.s_freq] || [])];
+  return ids.map(id => store.get('templates', id)).filter(Boolean).map(tpl => ({
+    name: tpl.name,
+    items: (tpl.items || []).map(it => {
+      const ex = store.get('exercises', it.exercise_id);
+      if (!ex) return null;
+      const t = target.targetFor(ex, it, today, cfg);
+      return { name: ex.name, type: ex.type, sets: t.sets, reps: t.reps, weight: t.weight, per_hand: ex.per_hand, reason: t.reason, text: target.targetText(ex, t) };
+    }).filter(Boolean)
+  }));
+}
+
+function viewPlan() {
+  const today = todayJst();
+  if (!state.draft || state.draft.kind !== 'plan') {
+    const cfg = plan.planConfig();
+    if (cfg.body_weight == null) {
+      const w = calc.lastCondition('weight', addDays(today, 1));
+      if (w) cfg.body_weight = round(w.weight, 1);
+    }
+    state.draft = { kind: 'plan', cfg };
+  }
+  const cfg = state.draft.cfg;
+  const pt = plan.patternFromConfig(cfg);
+  const seg = (k, vals, label = v => v) => `<div class="seg">${vals.map(v => `<button class="${String(cfg[k]) === String(v) ? 'on' : ''}" data-act="cfg-set" data-k="${k}" data-v="${v}">${esc(label(v))}</button>`).join('')}</div>`;
+  const dayLine = (days, wd) => {
+    const n = l => (days[wd][l] && store.get('templates', days[wd][l]) ? shortName(store.get('templates', days[wd][l])) : '');
+    const parts = [n('s'), n('c')].filter(Boolean);
+    return `<div class="week-row"><b>${WEEKDAYS[wd]}</b><span>${parts.length ? esc(parts.join('・')) : '<span class="hint">休み</span>'}</span></div>`;
+  };
+  const order = [1, 2, 3, 4, 5, 6, 0];
+  const rows = splitRows(cfg, today);
+  const num = (k, label, unit, ph = '') => `<label class="field"><span>${label}</span><span class="field-in"><input data-plan-num="${k}" inputmode="decimal" value="${esc(cfg[k] == null ? '' : cfg[k])}" placeholder="${esc(ph)}">${unit}</span></label>`;
+  return {
+    title: 'プラン',
+    back: '#/settings',
+    tab: 'settings',
+    html: `<section class="card form">
+      <h2>筋トレ</h2>
+      <div class="field"><span>週の回数</span>${seg('s_freq', [2, 3, 4, 5, 6], v => `${v}回`)}</div>
+      <p class="hint">分け方：${esc((plan.S_SPLITS[cfg.s_freq] || []).map(id => (store.get('templates', id) || {}).name).filter(Boolean).join(' → '))}</p>
+    </section>
+    <section class="card form">
+      <div class="card-head"><h2>有酸素</h2>
+        <label class="switch"><input type="checkbox" data-plan-check="c_on" ${cfg.c_on ? 'checked' : ''}><span>${cfg.c_on ? 'オン' : 'オフ'}</span></label></div>
+      ${cfg.c_on ? `<div class="field"><span>種類</span>${seg('c_type', ['run', 'swim', 'both'], v => C_TYPE_LABEL[v])}</div>
+        <div class="field"><span>週の回数</span>${seg('c_freq', [2, 3, 4, 5, 6], v => `${v}回`)}</div>
+        ${cfg.c_type === 'swim' && cfg.c_freq > 2 ? '<p class="hint">水泳は塩素の負担があるため、週1〜2回までがおすすめです。</p>' : ''}
+        ${cfg.c_type !== 'swim' ? `<label class="check"><input type="checkbox" data-plan-check="intro" ${cfg.intro_until ? 'checked' : ''}> はじめの期間はランを「導入（歩き混ぜ）」にする</label>
+          ${cfg.intro_until ? `<label class="field"><span>この日まで</span><input type="date" data-plan-date="intro_until" value="${esc(cfg.intro_until)}"></label>` : ''}` : ''}` : ''}
+    </section>
+    <section class="card">
+      <h2>1週間のレール</h2>
+      ${pt.intro ? `<h3>${esc(fmtDate(cfg.intro_until))}まで</h3>${order.map(wd => dayLine(pt.intro, wd)).join('')}<h3>そのあと</h3>` : ''}
+      ${order.map(wd => dayLine(pt.main, wd)).join('')}
+    </section>
+    <section class="card form">
+      <h2>目標の計算に使う値</h2>
+      ${num('body_weight', '体重', 'kg')}
+      ${num('bench_max', 'ベンチプレスの最大（1回）', 'kg', '例 45')}
+      ${num('squat_max', 'スクワットの最大（1回）', 'kg', 'わからなければ空欄')}
+      ${num('pullup_max', '懸垂の最大回数', '回', '例 4')}
+      <p class="hint">記録がある種目は「前回、目標の回数を全セットこなせたら1段階上げる」で自動。記録が無い種目は、最大の値から目安を出します（10回×あと2回の重さ。推定なので、気になるときは下の「AI に確認する」で）。</p>
+    </section>
+    <section class="card">
+      <h2>今日の時点の目標（自動）</h2>
+      ${rows.map(r => `<h3>${esc(r.name)}</h3>${r.items.map(it => `<div class="target-row"><span>${esc(it.name)}</span><span>${esc(it.text)}</span></div>`).join('')}`).join('')}
+    </section>
+    <button class="btn btn-primary btn-wide" data-act="plan-apply">この内容で今日からレールを作り直す</button>
+    <button class="btn btn-wide" data-act="plan-ai">AI に確認する（依頼文をコピー）</button>
+    <a class="link-wide" href="#/import">AI の答えを貼り付けて取り込む ›</a>`
+  };
+}
+
 // ---------- メニューの取り込み ----------
 
 function viewImport() {
@@ -1079,7 +1235,7 @@ function importPreview(pv) {
     ${pv.templates.map(t => `<div class="import-tpl">
       <h3>${esc(t.name)} <small>${t.existing ? '（同じ名前のメニューを置き換え）' : '（新しいメニュー）'}</small></h3>
       ${t.items.map(it => `<p class="import-item">・${esc(it.name)}${it.isNew ? ' <small>（新しい種目として追加）</small>' : ''}
-        ${it.type === 'cardio' ? `${it.duration_min ? ` ${fmtNum(it.duration_min)}分` : ''}${it.distance_km ? ` ${fmtNum(it.distance_km, 2)}km` : ''}` : ` ${it.sets}セット`}
+        ${it.type === 'cardio' ? `${it.duration_min ? ` ${fmtNum(it.duration_min)}分` : ''}${it.distance_km ? ` ${fmtNum(it.distance_km, 2)}km` : ''}` : ` ${it.weight != null ? `${fmtNum(it.weight, 2)}kg × ` : ''}${it.reps ? `${it.reps}回 × ` : ''}${it.sets}セット`}
         ${it.note ? `<br><small>${esc(it.note)}</small>` : ''}</p>`).join('')}
     </div>`).join('')}
     ${pv.templates.length ? `<button class="btn btn-primary btn-wide" data-act="import-apply">${pv.templates.length}件のメニューを取り込む</button>` : ''}`;
@@ -1171,6 +1327,7 @@ const VIEWS = {
   templates: viewTemplates,
   template: viewTemplateEdit,
   schedule: viewSchedule,
+  plan: viewPlan,
   import: viewImport
 };
 
@@ -1215,6 +1372,33 @@ async function onClick(e) {
       break;
     }
     case 'record': await record(d.ex); break;
+    case 'card-done': await cardDone(d.ex); break;
+    case 'cfg-set': {
+      const c = state.draft.cfg;
+      c[d.k] = /^\d+$/.test(d.v) ? Number(d.v) : d.v;
+      render();
+      break;
+    }
+    case 'plan-apply': {
+      if (!confirm('今日以降のまだの予定を、このプランで作り直します。よろしいですか？')) return;
+      await plan.applyConfig(state.draft.cfg, todayJst());
+      state.draft = null;
+      location.hash = '#/home';
+      toast('レールを作り直しました');
+      break;
+    }
+    case 'plan-ai': {
+      const cfg = state.draft.cfg;
+      const text = menuio.buildStrengthPrompt(cfg, splitRows(cfg, todayJst()), cardioText(cfg));
+      try {
+        await navigator.clipboard.writeText(text);
+        toast('依頼文をコピーしました。AI に貼り付けて、答えは「取り込み」へ');
+      } catch (err) {
+        openModal(`<h2>AI への依頼文</h2><p class="hint">自動でコピーできませんでした。下の文を長押しで全部選んでコピーしてください。</p>
+          <textarea rows="14" readonly>${esc(text)}</textarea><div class="modal-actions"><button class="btn" data-act="modal-close">閉じる</button></div>`);
+      }
+      break;
+    }
     case 'undo': {
       if (!state.undo) return;
       for (const id of state.undo.ids) await store.remove('logs', id);
@@ -1419,6 +1603,18 @@ function onInput(e) {
     if (ds.export === 'memo') state.exportMemo = el.checked;
     else if (ds.export === 'from') state.exportFrom = el.value;
     else state.exportTo = el.value;
+  } else if (ds.planNum !== undefined) {
+    state.draft.cfg[ds.planNum] = parseNum(el.value);
+    if (e.type === 'change') render();
+  } else if (ds.planCheck !== undefined) {
+    if (e.type !== 'change') return;
+    const c = state.draft.cfg;
+    if (ds.planCheck === 'intro') c.intro_until = el.checked ? addDays(todayJst(), 13) : null;
+    else c[ds.planCheck] = el.checked;
+    render();
+  } else if (ds.planDate !== undefined) {
+    state.draft.cfg[ds.planDate] = el.value || null;
+    if (e.type === 'change') render();
   } else if (ds.sched !== undefined) {
     const [stage, wd, lane] = ds.sched.split(':');
     state.draft.pattern[stage][wd][lane] = el.value || null;

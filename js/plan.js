@@ -246,3 +246,76 @@ export function rainAlternative(today) {
   const bike = store.get('templates', 'tpl-bike-rain') || store.all('templates').find(t => (t.items || []).some(it => it.exercise_id === 'ex-bike'));
   return bike ? bike.id : null;
 }
+
+// ---------- プラン設定（頻度・有酸素・パラメータ） → 曜日割り ----------
+// settings の plan_config：{ s_freq, c_on, c_type(run/swim/both), c_freq, intro_until, body_weight, bench_max, squat_max, pullup_max }
+
+const CONFIG_KEY = 'plan_config';
+export const DEFAULT_CONFIG = { s_freq: 3, c_on: true, c_type: 'both', c_freq: 4, intro_until: null, body_weight: null, bench_max: null, squat_max: null, pullup_max: null };
+
+export function planConfig() {
+  const s = store.get('settings', CONFIG_KEY);
+  try {
+    if (!s || !s.value) return { ...DEFAULT_CONFIG, intro_until: pattern().intro_until }; // まだ保存していなければ、今の曜日割りの「はじめの期間」を引き継ぐ
+    return { ...DEFAULT_CONFIG, ...JSON.parse(s.value) };
+  } catch (e) {
+    return { ...DEFAULT_CONFIG };
+  }
+}
+
+export async function savePlanConfig(cfg) {
+  await store.put('settings', { id: CONFIG_KEY, value: JSON.stringify(cfg) });
+}
+
+// 筋トレの頻度ごとの分け方（ローテーションの順）と曜日
+export const S_SPLITS = {
+  2: ['tpl-full-a', 'tpl-full-b'],
+  3: ['tpl-upper-a', 'tpl-lower', 'tpl-upper-b'],
+  4: ['tpl-upper-a', 'tpl-lower', 'tpl-upper-b', 'tpl-lower-b'],
+  5: ['tpl-upper-a', 'tpl-lower', 'tpl-push', 'tpl-pull', 'tpl-legs'],
+  6: ['tpl-push', 'tpl-pull', 'tpl-legs', 'tpl-push', 'tpl-pull', 'tpl-legs']
+};
+const S_DAYS = { 2: [1, 4], 3: [1, 3, 5], 4: [1, 2, 4, 5], 5: [1, 2, 3, 5, 6], 6: [1, 2, 3, 4, 5, 6] };
+// 有酸素の曜日の選び方：筋トレの無い日を優先（火・木・土・日の順）、足りなければ筋トレの日にも入れる
+const C_PREF = [2, 4, 6, 0, 3, 5, 1];
+
+const T = {
+  runIntro: 'tpl-run-intro', runStd: 'tpl-run-std', runLong: 'tpl-run-long',
+  swimBasic: 'tpl-swim-basic', swimLong: 'tpl-swim-long'
+};
+
+export function patternFromConfig(cfg) {
+  const main = emptyDays();
+  const sFreq = Math.min(6, Math.max(2, Number(cfg.s_freq) || 3));
+  S_DAYS[sFreq].forEach((wd, i) => { main[wd].s = validTemplate(S_SPLITS[sFreq][i]); });
+  let intro = null;
+  if (cfg.c_on) {
+    const cFreq = Math.min(6, Math.max(2, Number(cfg.c_freq) || 4));
+    const sDays = S_DAYS[sFreq];
+    const cDays = [...C_PREF.filter(d => !sDays.includes(d)), ...C_PREF.filter(d => sDays.includes(d))].slice(0, cFreq);
+    const ordered = ORDER.filter(wd => cDays.includes(wd));
+    // 週末ロング：土（無ければ日、無ければ最後の日）
+    const longDay = ordered.includes(6) ? 6 : ordered.includes(0) ? 0 : ordered[ordered.length - 1];
+    // 両方のときの水泳の日：日（無ければ最後の日）。水泳は週1回
+    const swimDay = ordered.includes(0) ? 0 : ordered[ordered.length - 1];
+    ordered.forEach((wd, i) => {
+      let t;
+      if (cfg.c_type === 'swim') t = i % 2 === 0 ? T.swimBasic : T.swimLong;
+      else if (cfg.c_type === 'both' && wd === swimDay) t = T.swimBasic;
+      else t = wd === longDay && ordered.length >= 3 ? T.runLong : T.runStd;
+      main[wd].c = validTemplate(t);
+    });
+    if (cfg.intro_until && cfg.c_type !== 'swim') {
+      intro = JSON.parse(JSON.stringify(main));
+      ORDER.forEach(wd => { if ([T.runStd, T.runLong].includes(intro[wd].c)) intro[wd].c = validTemplate(T.runIntro); });
+    }
+  }
+  return { intro_until: intro ? cfg.intro_until : null, intro, main };
+}
+
+// プラン設定を保存して、今日からのレールを作り直す
+export async function applyConfig(cfg, today) {
+  await savePlanConfig(cfg);
+  await savePattern(patternFromConfig(cfg));
+  await rebuild(today);
+}

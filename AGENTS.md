@@ -12,6 +12,8 @@
 - 記録：筋トレ（重量×回数）・自重（回数＋任意の加重）・有酸素（時間・距離・任意のカロリー）。前回の値を表示してワンタップで流用
 - 定型メニュー（テンプレート）：上半身A・下半身・上半身B と、有酸素（ラン導入・ラン標準・週末ロング・スイム基礎・スイム少し長め・自転車雨の日）
 - レール（予定）：筋トレと有酸素の2本。曜日割りから6週間先までの予定を作り、カレンダーに表示。**ホームでは今日のレールだけを出し、メニューを選ばせない**。できなかった日の分は自動で後ろへずれる
+- プラン（設定）：筋トレの頻度（週2〜6）・有酸素のオン／オフ・種類（ラン／水泳／両方）・頻度（週2〜6）・計算に使う値（体重・MAX）から、曜日割りとメニューを自動で決める
+- 今日の画面は種目ごとのカード。今日の目標（自動計算）を出し、「目標どおりできた」の1タップで全セット記録、違ったら「数値で記録」
 - AI への依頼文（有酸素などのメニュー作り）をコピーし、返ってきた JSON をメニューとして取り込める
 - 懸垂カウンター（ホームの「懸垂 +2」）
 - 今日のまとめ・部位の色分け・直近7日の部位の頻度・カレンダーヒートマップ・種目ごとの推移・自己ベスト・週／月のサマリー
@@ -69,7 +71,8 @@ GAS は応答に1〜3秒かかるため、**画面は GAS を待たない**。
 | js/charts.js | グラフ（Chart.js） |
 | js/export.js | 受診用の書き出し（CSV・PNG・共有シート） |
 | js/plan.js | 予定（曜日ごとのメニュー → 予定づくり・後ろ倒し・スキップ） |
-| js/menuio.js | AI への依頼文づくりと、返ってきた JSON のメニュー取り込み |
+| js/menuio.js | AI への依頼文づくり（有酸素のメニュー作り・筋トレの目標の確認）と、返ってきた JSON のメニュー取り込み |
+| js/target.js | 今日の目標（重さ×回数×セット）の自動計算 |
 | js/seed.js | 初期データ（種目マスタ20種目・テンプレート5つ・部位7種類）。`SEED_VERSION` を上げると、まだ無い ID の分だけ各端末に足される |
 | js/util.js | 日付（JST）・数値の表示などの小さな道具 |
 | js/version.js | **アプリのバージョン**（設定画面に表示・Service Worker のキャッシュ名） |
@@ -110,10 +113,10 @@ GAS は応答に1〜3秒かかるため、**画面は GAS を待たない**。
 | logs | id, date, exercise_id, kind(normal/counter), set_no, weight, reps, added_weight, duration_min, distance_km, calories, memo, created_at, updated_at, deleted, synced_at |
 | templates | id, name, items（[{exercise_id, sets}] の JSON）, weekday（0=日〜6=土、空＝提案しない）, sort_order, created_at, updated_at, deleted, synced_at |
 | conditions | id（＝日付）, date, am_sys, am_dia, pm_sys, pm_dia, weight, memo, field_times（{am,pm,weight,memo} の更新日時 JSON）, created_at, updated_at, deleted, synced_at |
-| settings | id, value, updated_at, deleted, synced_at（`weight_goal_per_month`・`schedule_pattern`（曜日→テンプレートID の JSON）） |
+| settings | id, value, updated_at, deleted, synced_at（`weight_goal_per_month`・`schedule_pattern`（曜日割り）・`plan_config`（プラン設定）） |
 | plans | id（筋トレ＝日付、有酸素＝日付_c）, date, template_id, status(planned/skipped), created_at, updated_at, deleted, synced_at, lane(s=筋トレ/c=有酸素), seq（曜日割りの何番目か） |
 
-templates の items の1件は `{exercise_id, sets, note?, duration_min?, distance_km?}`（note はメニューの中身、時間・距離は有酸素の目安で、入力欄の最初の値になる）。
+templates の items の1件は `{exercise_id, sets, reps?, note?, duration_min?, distance_km?}`（reps は目標の回数、note はメニューの中身、時間・距離は有酸素の目安）。
 
 ## 計算の決まり（js/calc.js）
 
@@ -123,6 +126,15 @@ templates の items の1件は `{exercise_id, sets, note?, duration_min?, distan
 - 懸垂カウンター（`kind=counter`）：ボリュームには入れるが、運動日・部位・自己ベスト・「今日のセット数」には数えない
 - 部位：主部位 1、ほかの部位 0.5 で数える
 - 血圧の7日移動平均：その日を含む直近7日のうち、記録がある日だけで平均（抜けた日は飛ばす）
+
+## プランと今日の目標（js/plan.js・js/target.js）
+
+- `plan_config`：`{ s_freq, c_on, c_type(run/swim/both), c_freq, intro_until, body_weight, bench_max, squat_max, pullup_max }`。保存すると曜日割り（schedule_pattern）を作り直し、今日からのレールを作り直す
+- 筋トレの頻度ごとの分け方（`S_SPLITS`）：週2＝全身A・全身B／週3＝上半身A・下半身・上半身B／週4＝上半身A・下半身・上半身B・下半身B／週5＝上半身A・下半身・プッシュ・プル・脚／週6＝プッシュ・プル・脚×2
+- 有酸素の曜日は筋トレの無い日を優先（火・木・土・日の順）。ラン＝標準、土（無ければ日）は週末ロング。水泳＝基礎と少し長めを交互。両方＝日だけ水泳。「はじめの期間」はランを導入に
+- 今日の目標（target.js）：前回の一番重い重さで目標の回数を全セットこなせていたら1段階上げる（筋トレ＝増減幅、自重＝回数+1）。前回が無ければ MAX × 割合（`MAX_RATIO`。10回×あと2回の目安）、それも無ければ種目の初期重量。**下げる方向の自動調整はしない**
+- 推定に不安があるときは、プラン画面の「AI に確認する」で依頼文（体重・MAX・頻度・今の目標入り）をコピーし、答えの JSON を取り込む。取り込みの weight は種目の初期重量に入る
+- 「目標どおりできた」：残りのセットを目標の値でまとめて記録する（取り消しできる）
 
 ## レール（予定）のしくみ（js/plan.js）
 
@@ -154,7 +166,7 @@ templates の items の1件は `{exercise_id, sets, note?, duration_min?, distan
 - ユーザーが入力した文字を画面に出すときは必ず `esc()` を通す
 - 画面とサーバーを同時に変えるときは、新しい画面が古いサーバーを呼んでも壊れないように作る
 - 外部ライブラリは Chart.js だけ。CDN からは読まない（オフラインで動かなくなるため）
-- 片手操作：タップ領域は 48px 以上。記録までのタップ数を増やす変更はしない（ベンチプレス3セットがホームから5タップ：「上半身A を始める」→種目→記録×3）
+- 片手操作：タップ領域は 48px 以上。記録までのタップ数を増やす変更はしない（今日のレールの種目は「目標どおりできた」の1タップで全セット記録。数値を変えるときは「数値で記録」→記録×セット数）
 - 体調の画面では、血圧の値に警告色（赤など）を付けない。記録が抜けても責める表示を出さない。連続記録日数の演出は付けない
 - 日付は JST の `YYYY-MM-DD` 文字列で扱い、Date オブジェクトを画面とサーバーの間で受け渡さない（`js/util.js` の `todayJst()`・`addDays()` を使う）
 
