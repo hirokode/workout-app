@@ -1,152 +1,248 @@
-// 予定（どの日にどのメニューをやるか）。
+// 予定（レール）。どの日にどのメニューをやるかを先に決めておき、ホームではその日の分だけを出す。
 //
 // しくみ
-// - 「曜日ごとのメニュー」（設定の schedule_pattern）から、今日から6週間先までの予定を作る（plans。1日1件、id＝日付）
-// - 予定の並び順（ローテーション）は、月曜から順に並べた曜日ごとのメニュー。6週間より先は、最後の予定の続きから順に足していく
-// - その日に運動の記録（懸垂カウンター以外）があれば「できた」とみなす
-// - 後ろ倒し：その日以降のまだの予定を、次の「運動する曜日」へ1つずつずらす（全体が後ろにずれる）
-// - スキップ：その日の予定だけ取りやめる（ほかの予定は動かさない）
+// - レールは2本：筋トレ（lane=s）と有酸素（lane=c）。1日に各1件まで（id は筋トレ＝日付、有酸素＝日付_c）
+// - 「予定の作り方」（設定の schedule_pattern）で、曜日ごとに筋トレ・有酸素のメニューを決める。
+//   「はじめの期間」（intro_until まで）は別の曜日割り（例：ランは導入メニュー）にできる
+// - 今日から6週間先までの予定を作る。先を足すときは、そのレールの順番（月曜から並べた曜日割り。seq＝何番目か）の続きから
+// - その日にそのレールの記録（筋トレ／有酸素。懸垂カウンターは除く）があれば「できた」
+// - できなかった日の予定は、次に開いたときに自動で後ろへずれる（その先の予定も1つずつ後ろへ）。今日の分を自分でずらすこともできる
 
 import * as store from './store.js';
-import { workoutDays } from './calc.js';
+import { laneDays } from './calc.js';
 import { addDays, weekday } from './util.js';
 
+export const LANES = ['s', 'c'];
+export const LANE_LABEL = { s: '筋トレ', c: '有酸素' };
 const HORIZON_DAYS = 42;
-const MISSED_LOOKBACK = 14; // 何日前までの「まだの予定」を知らせるか
 const PATTERN_KEY = 'schedule_pattern';
+const ORDER = [1, 2, 3, 4, 5, 6, 0]; // 月曜から
 
-// 曜日（0=日 … 6=土）→ テンプレートID。未設定なら、テンプレートの「提案する曜日」から作る
-export function pattern() {
-  const s = store.get('settings', PATTERN_KEY);
-  if (s && s.value) {
-    try {
-      const p = JSON.parse(s.value);
-      if (p && typeof p === 'object') return p;
-    } catch (e) { /* 壊れていたら既定に戻す */ }
-  }
-  const p = {};
-  store.all('templates').forEach(t => {
-    if (t.weekday != null && p[t.weekday] == null) p[t.weekday] = t.id;
-  });
-  return p;
-}
-
-export async function savePattern(p) {
-  await store.put('settings', { id: PATTERN_KEY, value: JSON.stringify(p) });
-}
+export const planId = (date, lane) => (lane === 'c' ? date + '_c' : date);
+export const laneOf = x => (x.lane === 'c' ? 'c' : 's');
 
 function validTemplate(id) {
   return id && store.get('templates', id) ? id : null;
 }
 
-// 運動する曜日（月曜から順）
-function slotWeekdays(p) {
-  return [1, 2, 3, 4, 5, 6, 0].filter(wd => validTemplate(p[wd]));
+// ---------- 曜日割り ----------
+// { version: 2, intro_until: 'YYYY-MM-DD' | null, intro: {曜日: {s, c}}, main: {曜日: {s, c}} }
+
+function emptyDays() {
+  const d = {};
+  ORDER.forEach(wd => { d[wd] = { s: null, c: null }; });
+  return d;
 }
 
-// ローテーションの順番（月曜から順のメニュー）
-function sequence(p) {
-  return slotWeekdays(p).map(wd => p[wd]);
+function normDays(src) {
+  const d = emptyDays();
+  Object.keys(src || {}).forEach(wd => {
+    const v = src[wd];
+    if (!(wd in d)) return;
+    if (typeof v === 'string') d[wd].s = v; // 版1の形（曜日→筋トレのテンプレート）
+    else if (v && typeof v === 'object') d[wd] = { s: v.s || null, c: v.c || null };
+  });
+  return d;
 }
 
-export function plans() {
-  return store.all('plans').filter(x => validTemplate(x.template_id)).sort((a, b) => (a.date < b.date ? -1 : 1));
+export function pattern() {
+  const s = store.get('settings', PATTERN_KEY);
+  let raw = null;
+  if (s && s.value) {
+    try { raw = JSON.parse(s.value); } catch (e) { raw = null; }
+  }
+  if (raw && raw.version === 2) {
+    return { version: 2, intro_until: raw.intro_until || null, intro: raw.intro ? normDays(raw.intro) : null, main: normDays(raw.main) };
+  }
+  // まだ版2になっていない：版1の形か、テンプレートの「提案する曜日」から作る
+  let main;
+  if (raw && typeof raw === 'object') main = normDays(raw);
+  else {
+    main = emptyDays();
+    store.all('templates').forEach(t => { if (t.weekday != null && main[t.weekday] && !main[t.weekday].s) main[t.weekday].s = t.id; });
+  }
+  return { version: 1, intro_until: null, intro: null, main };
 }
 
-export function planOn(date) {
-  const x = store.get('plans', date);
+export async function savePattern(p) {
+  await store.put('settings', { id: PATTERN_KEY, value: JSON.stringify({ version: 2, intro_until: p.intro_until || null, intro: p.intro || null, main: p.main }) });
+}
+
+function templateIdByName(name, fallbackId) {
+  if (store.get('templates', fallbackId)) return fallbackId;
+  const t = store.all('templates').find(x => x.name === name);
+  return t ? t.id : null;
+}
+
+// 有酸素のレールが無ければ、おすすめの曜日割りを入れる（1回だけ。版2になったら以後は触らない）
+// はじめの2週間：火・木・土＝ラン導入、日＝スイム基礎／3週目から：火・木＝ラン標準、土＝週末ロング、日＝スイム基礎
+async function migrate(today) {
+  const p = pattern();
+  if (p.version === 2) return;
+  const intro = templateIdByName('ラン：導入（歩き混ぜ）', 'tpl-run-intro');
+  const std = templateIdByName('ラン：標準30分', 'tpl-run-std');
+  const long = templateIdByName('ラン：週末ロング', 'tpl-run-long');
+  const swim = templateIdByName('スイム：基礎', 'tpl-swim-basic');
+  const main = p.main;
+  const hasCardio = ORDER.some(wd => main[wd].c);
+  let introDays = null;
+  let until = null;
+  if (!hasCardio && std && long && swim && intro) {
+    main[2].c = std; main[4].c = std; main[6].c = long; main[0].c = swim;
+    introDays = JSON.parse(JSON.stringify(main));
+    introDays[2].c = intro; introDays[4].c = intro; introDays[6].c = intro;
+    until = addDays(today, 13);
+  }
+  await savePattern({ intro_until: until, intro: introDays, main });
+  // 曜日割りが変わったので、今日以降のまだの予定を作り直す
+  await rebuild(today, true);
+}
+
+function stageKey(p, d) {
+  return p.intro && p.intro_until && d <= p.intro_until ? 'intro' : 'main';
+}
+
+function slotsOf(p, stage, lane) {
+  const days = p[stage];
+  return ORDER.filter(wd => validTemplate(days[wd][lane]));
+}
+
+// ---------- 予定の読み出し ----------
+
+export function plans(lane) {
+  return store.all('plans')
+    .filter(x => validTemplate(x.template_id) && (!lane || laneOf(x) === lane))
+    .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : laneOf(a) < laneOf(b) ? -1 : 1));
+}
+
+export function planOn(date, lane) {
+  const x = store.get('plans', planId(date, lane));
   return x && validTemplate(x.template_id) ? x : null;
 }
 
-export function workedOn(date) {
-  return workoutDays().has(date);
+export function doneOn(date, lane) {
+  return laneDays()[lane].has(date);
 }
 
 // 予定の状態：done（できた）／skipped／missed（過ぎたのにまだ）／today／future
 export function status(x, today) {
   if (x.status === 'skipped') return 'skipped';
-  if (workedOn(x.date)) return 'done';
+  if (doneOn(x.date, laneOf(x))) return 'done';
   if (x.date < today) return 'missed';
   return x.date === today ? 'today' : 'future';
 }
 
-// 過ぎたのにまだの予定（新しい順）
-export function missed(today) {
-  const from = addDays(today, -MISSED_LOOKBACK);
-  return plans().filter(x => x.date >= from && x.date < today && status(x, today) === 'missed').reverse();
+// ---------- 予定づくり ----------
+
+// 準備：曜日割りの移行 → できなかった予定を後ろへ → 6週間先まで足す。後ろへずらした件数を返す
+export async function prepare(today) {
+  await migrate(today);
+  const moved = await catchUp(today);
+  await ensure(today);
+  return moved;
 }
 
-// 今日から6週間先まで予定があるようにする（足りない分だけ足す）
+// 今日から6週間先まで、各レールの予定があるようにする（足りない分だけ足す）
 export async function ensure(today) {
   const p = pattern();
-  const slots = slotWeekdays(p);
-  if (!slots.length) return;
-  const seq = sequence(p);
-  const all = plans();
-  const last = all.length ? all[all.length - 1] : null;
   const end = addDays(today, HORIZON_DAYS);
-  if (last && last.date >= end) return;
   const rows = [];
-  // 予定が1件も無い（または古い）ときは、曜日のとおりに作る。続きを足すときは、最後の予定の次のメニューから順に
-  const fresh = !last || last.date < today;
-  let idx = last && !fresh ? seq.indexOf(last.template_id) : -1;
-  let d = fresh ? today : addDays(last.date, 1);
-  for (; d <= end; d = addDays(d, 1)) {
-    if (!slots.includes(weekday(d))) continue;
-    if (store.get('plans', d)) continue; // 自分で入れた・スキップした日はそのまま
-    let tpl;
-    if (fresh || idx < 0) tpl = p[weekday(d)];
-    else { idx = (idx + 1) % seq.length; tpl = seq[idx]; }
-    if (!fresh && idx < 0) idx = seq.indexOf(tpl);
-    rows.push({ id: d, date: d, template_id: tpl, status: 'planned' });
-  }
+  LANES.forEach(lane => {
+    const all = plans(lane);
+    const last = all.length ? all[all.length - 1] : null;
+    if (last && last.date >= end) return;
+    const fresh = !last || last.date < today;
+    let prev = fresh ? null : { stage: stageKey(p, last.date), seq: last.seq };
+    for (let d = fresh ? today : addDays(last.date, 1); d <= end; d = addDays(d, 1)) {
+      const stage = stageKey(p, d);
+      const slots = slotsOf(p, stage, lane);
+      const pos = slots.indexOf(weekday(d));
+      if (pos < 0) continue;
+      if (store.get('plans', planId(d, lane))) continue; // 自分で入れた日はそのまま
+      // 同じ期間の続きなら順番どおり（ずらしたあとも並びが崩れないように）、そうでなければ曜日どおり
+      let seq = pos;
+      if (prev && prev.stage === stage && prev.seq != null && prev.seq < slots.length) seq = (prev.seq + 1) % slots.length;
+      const tpl = p[stage][slots[seq]][lane];
+      rows.push({ id: planId(d, lane), date: d, lane, seq, template_id: tpl, status: 'planned', deleted: false });
+      prev = { stage, seq };
+    }
+  });
   if (rows.length) await store.putMany('plans', rows);
 }
 
-// 曜日ごとのメニューを変えたとき：今日以降の、まだの予定を作り直す（できた日・過去はそのまま）
-export async function rebuild(today) {
-  const del = plans().filter(x => x.date >= today && !workedOn(x.date)).map(x => ({ ...x, deleted: true }));
-  if (del.length) await store.putMany('plans', del);
-  await ensure(today);
-}
-
-// 後ろ倒し：from の日の予定から先の「まだの予定」を、次の運動する曜日へ1つずつずらす。
-// from が過去（できなかった日）なら、今日以降の運動する曜日へ詰め直す
-export async function postpone(from, today) {
-  const p = pattern();
-  const slots = slotWeekdays(p);
-  if (!slots.length) return 0;
-  const moving = plans().filter(x => x.date >= from && x.status !== 'skipped' && !workedOn(x.date) && (x.date >= today || x.date === from));
+// まだの予定（moving）を、start より後のレールの日へ順に詰める。done の日は飛ばす
+async function shift(lane, moving, start, today) {
   if (!moving.length) return 0;
-  const keep = new Set(plans().filter(x => x.date > from && !moving.includes(x)).map(x => x.date));
-  const start = from < today ? addDays(today, -1) : from;
+  const p = pattern();
+  const keep = new Set(plans(lane).filter(x => !moving.includes(x) && x.date > start).map(x => x.date));
   const targets = [];
-  for (let d = addDays(start, 1); targets.length < moving.length; d = addDays(d, 1)) {
-    if (slots.includes(weekday(d)) && !keep.has(d)) targets.push(d);
+  for (let d = addDays(start, 1), guard = 0; targets.length < moving.length && guard < 400; d = addDays(d, 1), guard++) {
+    if (slotsOf(p, stageKey(p, d), lane).includes(weekday(d)) && !keep.has(d) && !(d < today)) targets.push(d);
   }
+  if (targets.length < moving.length) return 0; // レールの曜日が1つも無い
   const rows = new Map();
-  moving.forEach(x => rows.set(x.date, { ...x, deleted: true }));
-  moving.forEach((x, i) => rows.set(targets[i], { id: targets[i], date: targets[i], template_id: x.template_id, status: 'planned', deleted: false }));
+  moving.forEach(x => rows.set(x.id, { ...x, deleted: true }));
+  moving.forEach((x, i) => {
+    const d = targets[i];
+    const id = planId(d, lane);
+    rows.set(id, { id, date: d, lane, seq: x.seq, template_id: x.template_id, status: 'planned', deleted: false });
+  });
   await store.putMany('plans', [...rows.values()]);
   return moving.length;
 }
 
-export async function skip(date) {
-  const x = store.get('plans', date);
-  if (x) await store.put('plans', { ...x, status: 'skipped' });
+// できなかった日（今日より前でまだ）の予定があれば、今日以降へ自動でずらす
+export async function catchUp(today) {
+  let moved = 0;
+  for (const lane of LANES) {
+    const all = plans(lane);
+    const missed = all.filter(x => x.date < today && status(x, today) === 'missed');
+    if (!missed.length) continue;
+    const future = all.filter(x => x.date >= today && x.status !== 'skipped' && !doneOn(x.date, lane));
+    moved += await shift(lane, [...missed, ...future], addDays(today, -1), today);
+  }
+  return moved;
 }
 
-export async function unskip(date) {
-  const x = store.get('plans', date);
-  if (x) await store.put('plans', { ...x, status: 'planned' });
+// 「今日はできない」：その日から先のまだの予定を、次のレールの日へ1つずつずらす
+export async function postpone(date, lane, today) {
+  const moving = plans(lane).filter(x => x.date >= date && x.status !== 'skipped' && !doneOn(x.date, lane));
+  return shift(lane, moving, date, today);
+}
+
+// 曜日割りを変えたとき：今日以降の、まだの予定を作り直す
+export async function rebuild(today, skipEnsure) {
+  const del = plans().filter(x => x.date >= today && !doneOn(x.date, laneOf(x))).map(x => ({ ...x, deleted: true }));
+  if (del.length) await store.putMany('plans', del);
+  if (!skipEnsure) await ensure(today);
 }
 
 // その日の予定を変える（null で予定なしにする）
-export async function setPlan(date, templateId) {
-  const x = store.getAny('plans', date);
+export async function setPlan(date, lane, templateId) {
+  const id = planId(date, lane);
+  const x = store.getAny('plans', id);
   if (!templateId) {
     if (x && !x.deleted) await store.put('plans', { ...x, deleted: true });
     return;
   }
-  await store.put('plans', { ...(x || {}), id: date, date, template_id: templateId, status: 'planned', deleted: false });
+  await store.put('plans', { ...(x || {}), id, date, lane, template_id: templateId, status: 'planned', deleted: false });
+}
+
+// 次にレールがある日（今日より後）
+export function nextPlans(today) {
+  const all = plans().filter(x => x.date > today && x.status !== 'skipped');
+  if (!all.length) return null;
+  const date = all[0].date;
+  return { date, list: all.filter(x => x.date === date) };
+}
+
+// 雨の日の差し替え：今日の有酸素がランなら、自転車のメニューに替える
+export function rainAlternative(today) {
+  const x = planOn(today, 'c');
+  if (!x || doneOn(today, 'c')) return null;
+  const tpl = store.get('templates', x.template_id);
+  const isRun = tpl && (tpl.items || []).some(it => it.exercise_id === 'ex-running');
+  if (!isRun) return null;
+  const bike = store.get('templates', 'tpl-bike-rain') || store.all('templates').find(t => (t.items || []).some(it => it.exercise_id === 'ex-bike'));
+  return bike ? bike.id : null;
 }

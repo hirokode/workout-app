@@ -561,7 +561,8 @@ textarea {
 
 /* ---------- 予定 ---------- */
 
-.plan-actions { display: flex; justify-content: space-between; gap: 8px; margin-top: -4px; }
+.plan-actions { display: flex; flex-direction: column; align-items: flex-start; margin-top: 2px; }
+.plan-actions .link { min-height: 36px; padding: 4px 2px; text-align: left; }
 .next-plan { margin: 8px 0 0; }
 .missed { background: color-mix(in srgb, var(--accent) 6%, var(--card)); }
 .missed p { margin: 0; }
@@ -612,14 +613,44 @@ textarea {
 .cal-legend .cal-chip { margin-left: 4px; }
 
 .plan-panel { margin-bottom: 8px; }
-.plan-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.plan-label { flex: 1; font-weight: 600; min-width: 8em; }
+.plan-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+.plan-label { flex: 1; font-weight: 600; min-width: 6em; }
+.plan-panel .plan-select { width: 100%; margin-top: 4px; }
 .plan-label .cal-chip { font-size: .72rem; vertical-align: middle; }
 .plan-select { flex: 0 1 12em; width: auto; }
 
-.sched-row { display: flex; align-items: center; gap: 12px; }
-.sched-row > span:first-child { width: 2.5em; margin: 0; font-size: .95rem; color: var(--text); }
-.sched-row .select { flex: 1; }
+/* 予定の作り方（曜日 × 筋トレ・有酸素） */
+.sched-lead { margin: 10px 4px 0; }
+.sched-table { display: grid; gap: 6px; margin: 8px 0; }
+.sched-head, .sched-row { display: grid; grid-template-columns: 1.8em 1fr 1fr; gap: 6px; align-items: center; }
+.sched-head span { font-size: .75rem; color: var(--muted); }
+.sched-row > span:first-child { font-weight: 600; text-align: center; }
+.sched-row .select { min-width: 0; padding: 6px 8px; font-size: .85rem; }
+
+/* 今日のレール */
+.rail-row { padding: 10px 0; border-top: 1px solid var(--line); }
+.rail-row:first-of-type { border-top: 0; padding-top: 0; }
+.rail-head { display: flex; align-items: center; justify-content: space-between; }
+.rail-lane {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 6px;
+  font-size: .72rem;
+  font-weight: 700;
+  background: var(--accent-soft);
+  color: var(--accent);
+  white-space: nowrap;
+}
+.lane-c .rail-lane { background: color-mix(in srgb, #17a2b8 18%, transparent); color: #128193; }
+.rail-row .btn-wide { margin: 8px 0 4px; }
+.rail-name { margin: 8px 0 4px; font-weight: 700; }
+.rail-note { margin: 2px 2px 0; white-space: pre-wrap; }
+.rail-rest { margin: 4px 0; font-weight: 600; }
+.link-wide { display: flex; justify-content: center; align-items: center; min-height: var(--tap); color: var(--accent); font-size: .9rem; }
+.cal-chip.lane-c:not(.done):not(.missed):not(.skipped) { background: color-mix(in srgb, #17a2b8 16%, transparent); color: #128193; }
+@media (prefers-color-scheme: dark) {
+  .lane-c .rail-lane, .cal-chip.lane-c:not(.done):not(.missed):not(.skipped) { color: #5fd0e0; }
+}
 
 /* テンプレートの編集・取り込み */
 .tpl-block { border-top: 1px solid var(--line); padding-bottom: 8px; }

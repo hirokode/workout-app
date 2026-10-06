@@ -21,7 +21,8 @@ const FIELD_RULES = {
   conditions: { id: 'date', date: 'date', am_sys: 'num', am_dia: 'num', pm_sys: 'num', pm_dia: 'num', weight: 'num',
     memo: 'text:500', field_times: 'json:500', created_at: 'ts', updated_at: 'ts', deleted: 'bool' },
   settings: { id: 'id', value: 'text:2000', updated_at: 'ts', deleted: 'bool' },
-  plans: { id: 'date', date: 'date', template_id: 'id', status: 'enum:planned,skipped', created_at: 'ts', updated_at: 'ts', deleted: 'bool' }
+  plans: { id: 'id', date: 'date', template_id: 'id', status: 'enum:planned,skipped', created_at: 'ts', updated_at: 'ts', deleted: 'bool',
+    lane: 'enum:s,c', seq: 'num' }
 };
 const CONDITION_GROUPS = { am: ['am_sys', 'am_dia'], pm: ['pm_sys', 'pm_dia'], weight: ['weight'], memo: ['memo'] };
 

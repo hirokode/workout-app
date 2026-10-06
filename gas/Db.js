@@ -13,7 +13,7 @@ const SCHEMA = {
   conditions: ['id', 'date', 'am_sys', 'am_dia', 'pm_sys', 'pm_dia', 'weight', 'memo', 'field_times',
     'created_at', 'updated_at', 'deleted', 'synced_at'],
   settings: ['id', 'value', 'updated_at', 'deleted', 'synced_at'],
-  plans: ['id', 'date', 'template_id', 'status', 'created_at', 'updated_at', 'deleted', 'synced_at']
+  plans: ['id', 'date', 'template_id', 'status', 'created_at', 'updated_at', 'deleted', 'synced_at', 'lane', 'seq']
 };
 const SPREADSHEET_NAME = 'ワークアウト記録 データ';
 const PASSCODE_KEY = 'WORKOUT_PASSCODE';

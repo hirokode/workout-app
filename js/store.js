@@ -4,7 +4,7 @@
 // 削除は行を消さずに deleted=true にする（サーバーや別の端末に削除を伝えるため）。
 
 import { nowIso } from './util.js';
-import { seedExercises, seedTemplates, SEED_VERSION } from './seed.js';
+import { seedExercises, seedTemplates, SEED_VERSION, SEED_TS, RETIRED_TEMPLATES } from './seed.js';
 
 export const TABLES = ['exercises', 'logs', 'templates', 'conditions', 'settings', 'plans'];
 
@@ -18,7 +18,7 @@ const FIELDS = {
   conditions: { id: 's', date: 's', am_sys: 'n', am_dia: 'n', pm_sys: 'n', pm_dia: 'n', weight: 'n', memo: 's',
     field_times: 'j', created_at: 's', updated_at: 's', deleted: 'b' },
   settings: { id: 's', value: 's', updated_at: 's', deleted: 'b' },
-  plans: { id: 's', date: 's', template_id: 's', status: 's', created_at: 's', updated_at: 's', deleted: 'b' }
+  plans: { id: 's', date: 's', template_id: 's', status: 's', created_at: 's', updated_at: 's', deleted: 'b', lane: 's', seq: 'n' }
 };
 
 // 体調の項目のまとまり（朝の血圧・夜の血圧・体重・メモ）。まとまりごとに新しいほうを残す
@@ -111,7 +111,13 @@ export async function init() {
   const seedVer = meta.seedVersion || (meta.seeded ? 1 : 0);
   if (seedVer < SEED_VERSION) {
     const ex = seedExercises().filter(r => !data.exercises.has(r.id));
-    const tp = seedTemplates().filter(r => !data.templates.has(r.id));
+    // 同じ名前のメニューを自分で取り込み済みなら、初期データ側は足さない
+    const names = new Set([...data.templates.values()].filter(t => !t.deleted).map(t => t.name));
+    const tp = seedTemplates().filter(r => !data.templates.has(r.id) && !names.has(r.name) && !RETIRED_TEMPLATES.includes(r.id));
+    RETIRED_TEMPLATES.forEach(id => {
+      const t = data.templates.get(id);
+      if (t && !t.deleted && t.updated_at === SEED_TS) tp.push({ ...t, deleted: true, updated_at: nowIso() });
+    });
     ex.forEach(r => { data.exercises.set(r.id, r); meta.outbox['exercises:' + r.id] = r.updated_at; });
     tp.forEach(r => { data.templates.set(r.id, r); meta.outbox['templates:' + r.id] = r.updated_at; });
     meta.seeded = true;

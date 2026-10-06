@@ -132,6 +132,18 @@ export const workoutDays = memo(() => {
   return map;
 });
 
+// レール（予定）の「できた」判定用：筋トレ（有酸素以外）をした日と、有酸素をした日
+export const laneDays = memo(() => {
+  const s = new Set();
+  const c = new Set();
+  logs().forEach(l => {
+    if (!isWorkout(l)) return;
+    const ex = exercise(l.exercise_id);
+    (ex && ex.type === 'cardio' ? c : s).add(l.date);
+  });
+  return { s, c };
+});
+
 export function countDays(days, from, to) {
   let n = 0;
   days.forEach((_, d) => { if (d >= from && d <= to) n++; });
