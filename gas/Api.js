@@ -16,11 +16,12 @@ const FIELD_RULES = {
   logs: { id: 'id', date: 'date', exercise_id: 'id', kind: 'enum:normal,counter', set_no: 'num', weight: 'num', reps: 'num',
     added_weight: 'num', duration_min: 'num', distance_km: 'num', calories: 'num', memo: 'text:200',
     created_at: 'ts', updated_at: 'ts', deleted: 'bool' },
-  templates: { id: 'id', name: 'text:40', items: 'json:4000', weekday: 'num', sort_order: 'num',
+  templates: { id: 'id', name: 'text:40', items: 'json:8000', weekday: 'num', sort_order: 'num',
     created_at: 'ts', updated_at: 'ts', deleted: 'bool' },
   conditions: { id: 'date', date: 'date', am_sys: 'num', am_dia: 'num', pm_sys: 'num', pm_dia: 'num', weight: 'num',
     memo: 'text:500', field_times: 'json:500', created_at: 'ts', updated_at: 'ts', deleted: 'bool' },
-  settings: { id: 'id', value: 'text:200', updated_at: 'ts', deleted: 'bool' }
+  settings: { id: 'id', value: 'text:2000', updated_at: 'ts', deleted: 'bool' },
+  plans: { id: 'date', date: 'date', template_id: 'id', status: 'enum:planned,skipped', created_at: 'ts', updated_at: 'ts', deleted: 'bool' }
 };
 const CONDITION_GROUPS = { am: ['am_sys', 'am_dia'], pm: ['pm_sys', 'pm_dia'], weight: ['weight'], memo: ['memo'] };
 

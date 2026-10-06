@@ -17,6 +17,8 @@ const SHELL_FILES = [
   './js/sync.js',
   './js/calc.js',
   './js/charts.js',
+  './js/plan.js',
+  './js/menuio.js',
   './js/export.js',
   './js/seed.js',
   './js/util.js',
