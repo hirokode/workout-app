@@ -319,3 +319,13 @@ export async function applyConfig(cfg, today) {
   await savePattern(patternFromConfig(cfg));
   await rebuild(today);
 }
+
+// 「今日はできない」の確認用：その日の予定が移る先の日（ずらしたときの最初の行き先）
+export function postponeTarget(date, lane) {
+  const p = pattern();
+  const keep = new Set(plans(lane).filter(x => x.date > date && (x.status === 'skipped' || doneOn(x.date, lane))).map(x => x.date));
+  for (let d = addDays(date, 1), i = 0; i < 400; d = addDays(d, 1), i++) {
+    if (slotsOf(p, stageKey(p, d), lane).includes(weekday(d)) && !keep.has(d)) return d;
+  }
+  return null;
+}
