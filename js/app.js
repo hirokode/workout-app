@@ -27,6 +27,8 @@ const state = {
   histDate: null,
   calMonth: null,
   importText: '',
+  open: {},         // 開いている折りたたみ（種目カードのメニューの中身など）
+  welcome: false,   // できなかった予定を自動でずらしたあと、ひとこと出す
   importPreview: null,
   trendEx: null,
   trendMetric: null,
@@ -55,6 +57,11 @@ async function main() {
     window.scrollTo(0, 0);
   });
   document.addEventListener('click', onClick);
+  // 折りたたみの開け閉めを覚えておく（描き直しても閉じないように）
+  document.addEventListener('toggle', e => {
+    const d = e.target;
+    if (d && d.dataset && d.dataset.fold) state.open[d.dataset.fold] = d.open;
+  }, true);
   document.addEventListener('input', onInput);
   document.addEventListener('change', onInput);
   sync.onStatus(s => {
@@ -88,7 +95,7 @@ async function ensurePlans() {
     const before = store.version();
     const moved = await plan.prepare(todayJst());
     if (store.version() !== before && route().name !== 'ex') render();
-    if (moved) toast('できなかった予定を、今日から先へずらしました（レールはそのまま続きます）');
+    if (moved) { state.welcome = true; if (route().name === 'home') maybeWelcomeBack(); }
   } finally {
     ensuring = false;
   }
@@ -143,24 +150,86 @@ function renderTabbar(active) {
 function viewHome() {
   const today = todayJst();
   const s = calc.daySummary(today);
+  const lanes = todayLanes(today);
   return {
     title: '今日 ' + fmtDate(today),
     html: `
-      <section class="stats">
-        ${stat('セット', s.sets, '')}
-        ${stat('総ボリューム', fmtInt(s.volume), 'kg')}
-        ${stat('有酸素', fmtNum(s.minutes, 0) || 0, '分')}
-      </section>
-      ${railCard(today)}
+      ${progressCard(today, lanes, s)}
+      ${lanes.map(l => laneCard(l, today)).join('')}
       ${counterCard(today)}
-      ${partsCard(today, s)}
-      ${todayCard(s)}
-      <a class="link-wide" href="#/pick">＋ レール以外の種目を記録する</a>`
+      ${partsCard(today, lanes, s)}
+      ${offRailCard(today, lanes, s)}
+      <a class="link-wide" href="#/pick">＋ ほかの種目を記録</a>`,
+    after() { maybeWelcomeBack(); }
   };
 }
 
-function stat(label, value, unit) {
-  return `<div class="stat"><div class="stat-value">${esc(value)}<small>${esc(unit)}</small></div><div class="stat-label">${esc(label)}</div></div>`;
+// 今日のレール（筋トレ・有酸素）と、その種目・進み具合
+function todayLanes(today) {
+  return plan.LANES.map(lane => {
+    const x = plan.planOn(today, lane);
+    if (!x) return null;
+    const tpl = store.get('templates', x.template_id);
+    const items = (tpl.items || []).map(it => ({ it, ex: store.get('exercises', it.exercise_id) })).filter(o => o.ex)
+      .map(o => ({ ...o, pg: itemProgress(o.ex, o.it, today) }));
+    return { lane, tpl, items, done: items.filter(o => o.pg.complete).length };
+  }).filter(Boolean);
+}
+
+// いちばん上：今日の進み具合（輪っか）
+function progressCard(today, lanes, s) {
+  const next = plan.nextPlans(today);
+  const nextText = next ? `次：${fmtDate(next.date)} ${next.list.map(x => store.get('templates', x.template_id).name).join('・')}` : '';
+  if (!lanes.length) {
+    return `<section class="card hero rest"><div class="hero-emoji">🌙</div>
+      <div class="hero-text"><b>今日はお休み</b><small>${esc(nextText || '設定 → プランでレールを作れます')}</small></div></section>`;
+  }
+  const total = lanes.reduce((a, l) => a + l.items.length, 0);
+  const done = lanes.reduce((a, l) => a + l.done, 0);
+  const pct = total ? done / total : 0;
+  const r = 26;
+  const c = 2 * Math.PI * r;
+  const chips = [s.sets ? `${s.sets}セット` : '', s.volume ? `${fmtInt(s.volume)}kg` : '', s.minutes ? `有酸素${fmtNum(s.minutes, 0)}分` : ''].filter(Boolean);
+  return `<section class="card hero ${done === total ? 'complete' : ''}">
+    <svg class="ring" viewBox="0 0 64 64" aria-hidden="true">
+      <circle cx="32" cy="32" r="${r}" class="ring-bg"></circle>
+      ${pct > 0 ? `<circle cx="32" cy="32" r="${r}" class="ring-fg" stroke-dasharray="${(c * pct).toFixed(1)} ${c.toFixed(1)}"></circle>` : ''}
+      <text x="32" y="37" text-anchor="middle">${done === total ? '🎉' : `${done}/${total}`}</text>
+    </svg>
+    <div class="hero-text">
+      <b>${done === total ? 'ぜんぶできた！おつかれさま' : done ? `あと${total - done}つ` : `今日は${total}つ`}</b>
+      ${chips.length ? `<span class="hero-chips">${chips.map(x => `<span>${esc(x)}</span>`).join('')}</span>` : ''}
+      ${nextText ? `<small>${esc(nextText)}</small>` : ''}
+    </div>
+  </section>`;
+}
+
+// レールのカード（筋トレ／有酸素）
+function laneCard(l, today) {
+  const allDone = l.done === l.items.length;
+  const started = plan.doneOn(today, l.lane);
+  const rain = l.lane === 'c' ? plan.rainAlternative(today) : null;
+  const pct = l.items.length ? Math.round(l.done / l.items.length * 100) : 0;
+  return `<section class="card lane-card lane-${l.lane} ${allDone ? 'all-done' : ''}">
+    <div class="lane-head">
+      <span class="rail-lane">${plan.LANE_LABEL[l.lane]}</span>
+      <h2>${esc(l.tpl.name)}</h2>
+      <span class="lane-count">${l.done}/${l.items.length}</span>
+    </div>
+    <div class="lane-bar"><i style="width:${pct}%"></i></div>
+    ${allDone ? `<div class="lane-done">🎉 ${plan.LANE_LABEL[l.lane]}、完了！</div>` : ''}
+    ${l.items.map(o => exCard(o.ex, o.it, o.pg, today)).join('')}
+    ${started ? '' : `<div class="lane-actions">
+      <button class="chip-btn" data-act="plan-postpone" data-date="${today}" data-lane="${l.lane}">🌙 今日はできない</button>
+      ${rain ? `<button class="chip-btn" data-act="plan-rain" data-id="${esc(rain)}">☔ 自転車にする</button>` : ''}
+    </div>`}
+  </section>`;
+}
+
+// 注意書きを、絵文字つきの小さな吹き出しに
+function tipPill(t) {
+  const icon = /シャワー|保湿/.test(t) ? '🚿' : /息|呼吸|吐/.test(t) ? '🫧' : /ペース|km|速/.test(t) ? '🐢' : /休/.test(t) ? '☕' : '💡';
+  return `<span class="tip">${icon} ${esc(t)}</span>`;
 }
 
 function templates() {
@@ -200,32 +269,6 @@ function menuCard(today) {
   return '';
 }
 
-// 今日のレール（筋トレ・有酸素）。選ばせずに、その日の分だけを種目ごとのカードで出す
-function railCard(today) {
-  const lanes = plan.LANES.map(lane => {
-    const x = plan.planOn(today, lane);
-    if (!x) return '';
-    const tpl = store.get('templates', x.template_id);
-    const items = (tpl.items || []).map(it => ({ it, ex: store.get('exercises', it.exercise_id) })).filter(o => o.ex);
-    const doneCount = items.filter(o => itemProgress(o.ex, o.it, today).complete).length;
-    const started = plan.doneOn(today, lane);
-    const rain = lane === 'c' ? plan.rainAlternative(today) : null;
-    return `<section class="card lane-card lane-${lane} ${doneCount === items.length ? 'all-done' : ''}">
-      <div class="card-head"><h2><span class="rail-lane">${plan.LANE_LABEL[lane]}</span> ${esc(tpl.name)}</h2>
-        <span class="rail-progress">${doneCount === items.length ? '✓ ' : ''}${doneCount}/${items.length}</span></div>
-      ${items.map(o => exCard(o.ex, o.it, lane, today)).join('')}
-      ${started ? '' : `<div class="plan-actions">
-        <button class="link" data-act="plan-postpone" data-date="${today}" data-lane="${lane}">今日はできない（後ろにずらす）</button>
-        ${rain ? `<button class="link" data-act="plan-rain" data-id="${esc(rain)}">雨なので自転車に</button>` : ''}
-      </div>`}
-    </section>`;
-  }).join('');
-  const next = plan.nextPlans(today);
-  const nextText = next ? next.list.map(x => store.get('templates', x.template_id).name).join('・') : '';
-  return `${lanes || '<section class="card"><h2>今日はお休みの日です</h2></section>'}
-    ${next ? `<p class="hint next-plan">次のレール：${esc(fmtDate(next.date))} ${esc(nextText)}</p>` : '<p class="hint next-plan">「設定」→「プラン」でレールを作れます。</p>'}`;
-}
-
 // 今日のその種目の進み具合（筋トレ＝目標のセット数、有酸素＝1回）
 function itemProgress(ex, it, today) {
   const logs = calc.exerciseLogs(ex.id).filter(l => l.date === today);
@@ -233,26 +276,64 @@ function itemProgress(ex, it, today) {
   return { logs, goal, complete: logs.length >= goal };
 }
 
-// 種目のカード：今日の目標と、「目標どおりできた」（1タップで全部記録）・「数値を入れる」
-function exCard(ex, it, lane, today) {
+// 種目のカード：右の丸いボタン＝「目標どおりできた」（1タップで残りのセットを記録）。メニューの中身は折りたたみ
+function exCard(ex, it, pg, today) {
   const t = target.targetFor(ex, it, today);
-  const pg = itemProgress(ex, it, today);
-  const unit = ex.type === 'cardio' ? '' : 'セット';
+  const ns = noteSteps(it.note);
+  const plain = it.note && !ns ? String(it.note).split('。').map(x => x.trim()).filter(Boolean) : [];
+  const partial = pg.logs.length && !pg.complete;
+  const reason = shortReason(t.reason);
   return `<div class="ex-card ${pg.complete ? 'done' : ''}">
-    <div class="ex-card-head">
-      <span class="part-dot p-${PARTS.indexOf(calc.partsOf(ex)[0])}"></span>
-      <span class="ex-card-name">${esc(ex.name)}</span>
-      <span class="ex-card-count">${pg.complete ? '✓ ' : ''}${pg.logs.length}/${pg.goal}${unit}</span>
+    <div class="ex-row">
+      <div class="ex-main">
+        <div class="ex-name"><span class="part-dot p-${PARTS.indexOf(calc.partsOf(ex)[0])}"></span>${esc(ex.name)}</div>
+        ${pg.complete
+          ? `<div class="ex-done-text">✓ ${esc(groupSets(pg.logs, ex))}</div>`
+          : `<div class="ex-target">${cardTarget(ex, t)}</div>`}
+        <div class="ex-pills">
+          ${!pg.complete && reason ? `<span class="pill ${reason.startsWith('↑') ? 'up' : ''}">${esc(reason)}</span>` : ''}
+          ${!pg.complete && ex.per_hand ? '<span class="pill">片手</span>' : ''}
+          ${partial ? `<span class="pill">${pg.logs.length}/${pg.goal}セット</span>` : ''}
+          <a class="pill pill-link" href="#/ex/${esc(ex.id)}">✎ ${pg.complete ? '直す' : '数値で'}</a>
+        </div>
+      </div>
+      ${pg.complete
+        ? '<span class="check-badge" aria-label="完了">✓</span>'
+        : `<button class="check-btn" data-act="card-done" data-ex="${esc(ex.id)}" aria-label="目標どおりできた"><span>✓</span><small>${partial ? '残り' : 'できた'}</small></button>`}
     </div>
-    <div class="ex-card-target">${esc(target.targetText(ex, t))}</div>
-    ${t.reason ? `<div class="ex-card-reason">${esc(t.reason)}</div>` : ''}
-    ${it.note ? noteHtml(ex.id, it.note) : ''}
-    ${pg.logs.length ? `<div class="ex-card-logs">記録：${pg.logs.map(l => esc(setText(l, ex))).join('、')}</div>` : ''}
-    <div class="ex-card-actions">
-      ${pg.complete ? '' : `<button class="btn btn-primary" data-act="card-done" data-ex="${esc(ex.id)}">${pg.logs.length ? '残りを目標どおりに' : '目標どおりできた'}</button>`}
-      <a class="btn" href="#/ex/${esc(ex.id)}">${pg.complete ? '直す・追加' : '数値で記録'}</a>
-    </div>
+    ${ns || plain.length ? `<details class="ex-more" data-fold="${esc(ex.id)}" ${state.open[ex.id] ? 'open' : ''}>
+      <summary>${ns ? `メニューの中身（${ns.steps.length}ステップ）` : 'ポイント'}</summary>
+      ${ns ? stepsHtml(ex.id, ns) + (ns.tips.length ? `<div class="tip-row">${ns.tips.map(tipPill).join('')}</div>` : '') : `<ul class="bullets">${plain.map(x => `<li>${esc(x)}</li>`).join('')}</ul>`}
+    </details>` : ''}
   </div>`;
+}
+
+// カードの目標（大きく・短く）：「30kg × 10回 × 4」「10回 × 2」「34分・4.3km」
+function cardTarget(ex, t) {
+  if (ex.type === 'cardio') return esc(target.targetText(ex, t));
+  const head = ex.type === 'strength' ? `${fmtNum(t.weight, 2)}<u>kg</u> × ` : (t.added ? `+${fmtNum(t.added, 2)}<u>kg</u> × ` : '');
+  return `${head}${t.reps}<u>回</u> × ${t.sets}<u>セット</u>`;
+}
+
+// 同じ内容のセットをまとめる：「25kg×10 ×4セット」「25kg×10 ×2セット、22.5kg×8」
+function groupSets(logs, ex) {
+  const out = [];
+  logs.forEach(l => {
+    const t = setText(l, ex);
+    if (out.length && out[out.length - 1].t === t) out[out.length - 1].n++;
+    else out.push({ t, n: 1 });
+  });
+  return out.map(g => (g.n > 1 ? `${g.t} ×${g.n}${ex.type === 'cardio' ? '' : 'セット'}` : g.t)).join('、');
+}
+
+function shortReason(r) {
+  if (!r) return '';
+  const m = r.match(/\+([\d.]+kg|回数\+1)/);
+  if (r.startsWith('前回クリア')) return m && m[1] === '回数+1' ? '↑ +1回' : `↑ +${(r.match(/\+([\d.]+)kg/) || [])[1] || ''}kg`;
+  if (r.startsWith('前回と同じ')) return '前回と同じ';
+  if (r.startsWith('MAX')) return 'MAXから推定';
+  if (r.startsWith('初回')) return 'はじめて';
+  return r;
 }
 
 // メニューのメモを手順に分ける：「A → B → C。注意1。注意2」→ 手順 [A, B, C] と注意 [注意1, 注意2]
@@ -283,10 +364,15 @@ function stepState(today) {
   return st && st.date === today ? st : { date: today, map: {} };
 }
 
-// メモの表示：手順があれば小さなカードを縦に並べる（タップで ✓）。無ければそのまま
+// メモの表示（記録の画面用）：手順があれば小さなカード、注意は吹き出し
 function noteHtml(exId, note) {
   const ns = noteSteps(note);
-  if (!ns) return `<p class="ex-card-note">${esc(note)}</p>`;
+  if (!ns) return `<ul class="bullets">${String(note).split('。').map(x => x.trim()).filter(Boolean).map(x => `<li>${esc(x)}</li>`).join('')}</ul>`;
+  return stepsHtml(exId, ns) + (ns.tips.length ? `<div class="tip-row">${ns.tips.map(tipPill).join('')}</div>` : '');
+}
+
+// 手順の小さなカード（タップで ✓）
+function stepsHtml(exId, ns) {
   const done = stepState(todayJst()).map[exId] || [];
   return `<ol class="step-list">${ns.steps.map((x, i) => {
     const k = x.search(/[（(]/);
@@ -295,10 +381,9 @@ function noteHtml(exId, note) {
     const on = done.includes(i);
     return `<li><button class="step-card ${on ? 'done' : ''}" data-act="step-toggle" data-ex="${esc(exId)}" data-i="${i}" aria-pressed="${on}">
       <span class="step-no">${on ? '✓' : i + 1}</span>
-      <span class="step-text"><b>${esc(main)}</b>${sub ? `<small>${esc(sub)}</small>` : ''}</span>
+      <span class="step-text"><b>${esc(main)}</b>${sub ? `<small>${esc(sub.replace(/^[（(]|[）)]$/g, ''))}</small>` : ''}</span>
     </button></li>`;
-  }).join('')}</ol>
-  ${ns.tips.length ? `<ul class="step-tips">${ns.tips.map(t => `<li>${esc(t)}</li>`).join('')}</ul>` : ''}`;
+  }).join('')}</ol>`;
 }
 
 // 今日のレールの中から、その種目のメニュー項目を探す
@@ -342,45 +427,52 @@ async function cardDone(exId) {
   else toast(`記録しました（${esc(text)}）`, { undo: true, html: true });
 }
 
+// ちょこっと懸垂：思い立ったときに1タップで2回分を記録する（通常の記録とは別に数える）
 function counterCard(today) {
   const todayReps = calc.counterReps(today, today);
   const weekReps = calc.counterReps(addDays(today, -6), today);
   const hasToday = calc.logsOn(today).some(l => l.kind === 'counter');
   return `<section class="card counter">
-    <button class="btn btn-counter p-1" data-act="counter">懸垂 +${COUNTER_REPS}</button>
-    <div class="counter-info">
-      <div><b>${todayReps}</b> 回<small>今日</small></div>
-      <div><b>${weekReps}</b> 回<small>7日間</small></div>
-      ${hasToday ? '<button class="link" data-act="counter-undo">−取り消す</button>' : ''}
+    <div class="counter-text">
+      <h2>ちょこっと懸垂</h2>
+      <small>ぶら下がったついでに、1タップで${COUNTER_REPS}回</small>
+      <div class="counter-nums"><span><b>${todayReps}</b>回<em>今日</em></span><span><b>${weekReps}</b>回<em>7日間</em></span>
+        ${hasToday ? '<button class="link" data-act="counter-undo">1回分戻す</button>' : ''}</div>
     </div>
+    <button class="btn-counter" data-act="counter" aria-label="懸垂を${COUNTER_REPS}回記録">+${COUNTER_REPS}<small>回</small></button>
   </section>`;
 }
 
-function partsCard(today, s) {
+// 今日の部位：うすい色＝今日のレールで使う部位、こい色＝記録した部位
+function partsCard(today, lanes, s) {
   const week = calc.partDays(today, 7);
+  const planned = new Set(lanes.flatMap(l => l.items.flatMap(o => calc.partsOf(o.ex))));
   return `<section class="card">
-    <h2>今日の部位</h2>
+    <div class="card-head"><h2>今日の部位</h2><span class="legend-mini"><i class="lg-plan"></i>予定 <i class="lg-done"></i>記録済み</span></div>
     <div class="parts">
       ${PARTS.map((p, i) => {
-        const v = s.parts[p];
-        const op = v ? Math.min(1, 0.4 + v * 0.12) : 0;
-        return `<span class="part p-${i} ${v ? 'on' : ''}" style="--o:${op}">${esc(p)}${v ? `<small>${fmtNum(v)}</small>` : ''}</span>`;
+        const st = s.parts[p] ? 'done' : planned.has(p) ? 'plan' : '';
+        return `<span class="part p-${i} ${st}">${st === 'done' ? '✓ ' : ''}${esc(p)}</span>`;
       }).join('')}
     </div>
-    <h3>直近7日間（鍛えた日数）</h3>
-    <div class="week-parts">
-      ${PARTS.map((p, i) => `<div class="wp-row"><span class="wp-name">${esc(p)}</span>
-        <span class="wp-dots">${Array.from({ length: 7 }, (_, k) => `<i class="${k < week[p] ? 'on p-' + i : ''}"></i>`).join('')}</span>
-        <span class="wp-n">${week[p]}日</span></div>`).join('')}
-    </div>
+    <details class="mini-fold"><summary>直近7日間に鍛えた日数</summary>
+      <div class="week-parts">
+        ${PARTS.map((p, i) => `<div class="wp-row"><span class="wp-name">${esc(p)}</span>
+          <span class="wp-dots">${Array.from({ length: 7 }, (_, k) => `<i class="${k < week[p] ? 'on p-' + i : ''}"></i>`).join('')}</span>
+          <span class="wp-n">${week[p]}日</span></div>`).join('')}
+      </div>
+    </details>
   </section>`;
 }
 
-function todayCard(s) {
-  if (!s.byEx.size) return '';
+// レール以外で記録したもの
+function offRailCard(today, lanes, s) {
+  const inRail = new Set(lanes.flatMap(l => l.items.map(o => o.ex.id)));
+  const rest = [...s.byEx.entries()].filter(([exId]) => !inRail.has(exId));
+  if (!rest.length) return '';
   return `<section class="card">
-    <h2>今日の記録</h2>
-    ${[...s.byEx.entries()].map(([exId, ls]) => {
+    <h2>ほかの記録</h2>
+    ${rest.map(([exId, ls]) => {
       const ex = calc.exercise(exId);
       return `<a class="log-line" href="#/ex/${esc(exId)}">
         <span class="part-dot p-${PARTS.indexOf(calc.partsOf(ex)[0])}"></span>
@@ -991,57 +1083,108 @@ async function exportBody(fmt, preset) {
 function viewSettings() {
   const cfg = sync.getConfig();
   const s = sync.status();
+  const pc = plan.planConfig();
+  const row = (href, icon, title, sub = '') => `<a class="list-row" href="${href}"><span class="row-icon">${icon}</span>
+    <span class="row-main"><b>${esc(title)}</b>${sub ? `<small>${esc(sub)}</small>` : ''}</span><span class="chev">›</span></a>`;
   return {
     title: '設定',
     html: `
+      <section class="card list-card">
+        ${row('#/plan', '🗓️', 'プラン', `筋トレ 週${pc.s_freq}・有酸素 ${pc.c_on ? `週${pc.c_freq}` : 'なし'}`)}
+        ${row('#/templates', '📋', 'メニュー')}
+        ${row('#/exercises', '🏋️', '種目')}
+        ${row('#/import', '🤖', 'AI にメニューを作ってもらう')}
+      </section>
       <section class="card">
-        <h2>サーバーとの同期</h2>
-        <p class="sync-state sync-${s.kind}">${esc(s.kind === 'local' ? '未設定（この端末だけに保存しています）' : s.text)}${s.message ? `<br><small>${esc(s.message)}</small>` : ''}</p>
+        <div class="inline-setting"><span>体重の目標ペース</span>
+          <span class="field-in"><input id="cfg-goal" inputmode="decimal" value="${esc(fmtNum(goalPerMonth(), 2))}">kg／月</span>
+          <button class="btn btn-small" data-act="goal-save">保存</button></div>
+      </section>
+      <section class="card about">
+        <span>バージョン <b id="app-version">${esc(APP_VERSION)}</b></span>
+        <span class="hint">${state.persistent ? '' : '⚠ 一時保存（プライベートブラウズ）'}${sync.isConfigured() && store.pendingCount() ? `未同期 ${store.pendingCount()}件` : ''}</span>
+      </section>
+      <details class="card fold" data-fold="sync" ${state.open.sync || s.kind === 'error' ? 'open' : ''}>
+        <summary><span class="row-icon">🔄</span><b>サーバーとの同期</b><span class="fold-status sync-${s.kind}">${esc(s.kind === 'local' ? '未設定' : s.text)}</span></summary>
+        ${s.message ? `<p class="sync-state sync-${s.kind}">${esc(s.message)}</p>` : ''}
         <label class="field"><span>GAS の URL</span><input id="cfg-url" type="url" autocomplete="off" placeholder="https://script.google.com/macros/s/…/exec" value="${esc(cfg.url)}"></label>
         <label class="field"><span>合言葉</span><input id="cfg-pass" type="password" autocomplete="off" value="${esc(cfg.passcode)}"></label>
         <button class="btn btn-primary btn-wide" data-act="cfg-save">保存して接続テスト</button>
         <div class="row-actions">
           <button class="btn" data-act="sync-now">今すぐ同期</button>
-          <button class="btn" data-act="sync-reset">サーバーから全部取り直す</button>
+          <button class="btn" data-act="sync-reset">全部取り直す</button>
         </div>
-        <p class="hint">URL と合言葉はこの端末にだけ保存されます（GitHub には入りません）。</p>
-      </section>
-      <section class="card">
-        <a class="nav-line" href="#/plan">プラン（頻度・有酸素・目標の計算） ›</a>
-        <a class="nav-line" href="#/schedule">曜日割りを手で調整する ›</a>
-        <a class="nav-line" href="#/templates">メニュー（テンプレート）の管理 ›</a>
-        <a class="nav-line" href="#/import">AI にメニューを作ってもらう ›</a>
-        <a class="nav-line" href="#/exercises">種目の管理 ›</a>
-      </section>
-      <section class="card">
-        <h2>体重の目標ペース</h2>
-        <div class="field-in"><input id="cfg-goal" inputmode="decimal" value="${esc(fmtNum(goalPerMonth(), 2))}"> kg／月</div>
-        <button class="btn btn-wide" data-act="goal-save">保存</button>
-      </section>
-      <section class="card">
-        <h2>このアプリについて</h2>
-        <p>バージョン <b id="app-version">${esc(APP_VERSION)}</b></p>
-        <p class="hint">端末の保存先：${state.persistent ? 'IndexedDB' : '<b>一時的（プライベートブラウズなど）。アプリを閉じると消えます</b>'}・未同期 ${store.pendingCount()}件</p>
-      </section>`
+      </details>`
   };
 }
 
+// 種目：筋トレ（自重を含む）と有酸素に分けて表示。左のつまみでドラッグして並べ替え、右のスイッチで一覧に出す／出さない
 function viewExercises() {
   const list = exercisesSorted();
+  const group = (title, xs, key) => `<section class="card list-card">
+    <h2 class="list-title">${title}</h2>
+    <div class="sort-list" data-sort-group="${key}">
+      ${xs.map(e => `<div class="sort-row ${e.active ? '' : 'off'}" data-sort-id="${esc(e.id)}">
+        <span class="drag-handle" aria-label="ドラッグで並べ替え">⋮⋮</span>
+        <a class="sort-main" href="#/exercise/${esc(e.id)}"><span class="part-dot p-${PARTS.indexOf(calc.partsOf(e)[0])}"></span>
+          <span><b>${esc(e.name)}</b><small>${esc(calc.partsOf(e).join('・'))}</small></span></a>
+        <label class="switch sm" aria-label="${esc(e.name)}を一覧に出す"><input type="checkbox" data-ex-active="${esc(e.id)}" ${e.active ? 'checked' : ''}></label>
+      </div>`).join('')}
+    </div>
+  </section>`;
   return {
-    title: '種目の管理',
+    title: '種目',
     back: '#/settings',
     tab: 'settings',
-    html: `<section class="card">
-      ${list.map((e, i) => `<div class="mgr-line ${e.active ? '' : 'hidden-item'}">
-        <a class="mgr-name" href="#/exercise/${esc(e.id)}"><span class="part-dot p-${PARTS.indexOf(calc.partsOf(e)[0])}"></span>${esc(e.name)}
-          <small>${esc(TYPE_LABEL[e.type] || '')}・${esc(calc.partsOf(e).join('・'))}${e.active ? '' : '・非表示'}</small></a>
-        <button class="icon-btn" data-act="ex-move" data-id="${esc(e.id)}" data-d="-1" ${i === 0 ? 'disabled' : ''} aria-label="上へ">↑</button>
-        <button class="icon-btn" data-act="ex-move" data-id="${esc(e.id)}" data-d="1" ${i === list.length - 1 ? 'disabled' : ''} aria-label="下へ">↓</button>
-      </div>`).join('')}
-    </section>
-    <a class="btn btn-wide" href="#/exercise/new">＋ 種目を追加</a>`
+    html: `${group('💪 筋トレ', list.filter(e => e.type !== 'cardio'), 's')}
+      ${group('🏃 有酸素', list.filter(e => e.type === 'cardio'), 'c')}
+      <a class="btn btn-wide" href="#/exercise/new">＋ 種目を追加</a>`,
+    after() {
+      document.querySelectorAll('.sort-list').forEach(el => enableSortable(el, saveExerciseOrder));
+    }
   };
+}
+
+// ドラッグで並べ替え（つまみを押したまま上下に動かす）。onDrop には並び終えた id の配列を渡す
+function enableSortable(container, onDrop) {
+  container.addEventListener('pointerdown', e => {
+    const handle = e.target.closest('.drag-handle');
+    if (!handle) return;
+    const row = handle.closest('[data-sort-id]');
+    e.preventDefault();
+    const offset = e.clientY - row.getBoundingClientRect().top;
+    let tr = 0;
+    row.classList.add('dragging');
+    const move = ev => {
+      const natural = row.getBoundingClientRect().top - tr;
+      tr = ev.clientY - offset - natural;
+      row.style.transform = `translateY(${tr}px)`;
+      const prev = row.previousElementSibling;
+      const next = row.nextElementSibling;
+      if (prev && ev.clientY < prev.getBoundingClientRect().top + prev.offsetHeight / 2) container.insertBefore(row, prev);
+      else if (next && ev.clientY > next.getBoundingClientRect().top + next.offsetHeight / 2) container.insertBefore(next, row);
+    };
+    const up = () => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+      window.removeEventListener('pointercancel', up);
+      row.style.transform = '';
+      row.classList.remove('dragging');
+      onDrop([...container.querySelectorAll('[data-sort-id]')].map(r => r.dataset.sortId));
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+    window.addEventListener('pointercancel', up);
+  });
+}
+
+// 並べ替えの保存：筋トレのグループ → 有酸素のグループの順に、表示順を振り直す
+async function saveExerciseOrder() {
+  const ids = [...document.querySelectorAll('.sort-list[data-sort-group="s"] [data-sort-id], .sort-list[data-sort-group="c"] [data-sort-id]')].map(r => r.dataset.sortId);
+  const rest = exercisesSorted().filter(e => !ids.includes(e.id)).map(e => e.id);
+  const changed = [...ids, ...rest].map((id, k) => ({ e: store.get('exercises', id), order: (k + 1) * 10 }))
+    .filter(x => x.e && x.e.sort_order !== x.order).map(x => ({ ...x.e, sort_order: x.order }));
+  if (changed.length) await store.putMany('exercises', changed);
 }
 
 function viewExerciseEdit(id) {
@@ -1052,6 +1195,7 @@ function viewExerciseEdit(id) {
       : { kind: 'exercise', id: 'new', name: '', type: 'strength', parts: [], step: 2.5, initial_weight: null, per_hand: false, active: true };
   }
   const d = state.draft;
+  const sw = (key, label) => `<label class="switch-row"><span>${label}</span><span class="switch"><input type="checkbox" data-draft-check="${key}" ${d[key] ? 'checked' : ''}></span></label>`;
   return {
     title: ex ? '種目の編集' : '種目の追加',
     back: '#/exercises',
@@ -1059,18 +1203,23 @@ function viewExerciseEdit(id) {
     html: `<section class="card form">
       <label class="field"><span>名前</span><input data-draft="name" data-text="1" maxlength="40" value="${esc(d.name)}"></label>
       <div class="field"><span>タイプ</span><div class="seg">${Object.entries(TYPE_LABEL).map(([k, v]) => `<button class="${d.type === k ? 'on' : ''}" data-act="draft-type" data-v="${k}">${v}</button>`).join('')}</div></div>
-      <div class="field"><span>部位（最初に選んだものが主部位）</span>
-        <div class="chip-row">${PARTS.map((p, i) => {
-          const k = d.parts.indexOf(p);
-          return `<button class="chip part-chip p-${i} ${k >= 0 ? 'on' : ''}" data-act="draft-part" data-v="${esc(p)}">${k === 0 ? '主 ' : ''}${esc(p)}</button>`;
-        }).join('')}</div></div>
-      ${d.type !== 'cardio' ? `<label class="field"><span>±ボタンの増減幅（${d.type === 'bodyweight' ? '加重' : '重量'}）</span><span class="field-in"><input data-draft="step" inputmode="decimal" value="${esc(v2s(d.step))}">kg</span></label>` : ''}
-      ${d.type === 'strength' ? `<label class="field"><span>初期重量の目安</span><span class="field-in"><input data-draft="initial_weight" inputmode="decimal" value="${esc(v2s(d.initial_weight))}">kg</span></label>
-        <label class="check"><input type="checkbox" data-draft-check="per_hand" ${d.per_hand ? 'checked' : ''}> 片手の重さで記録する（ダンベル）</label>` : ''}
-      <label class="check"><input type="checkbox" data-draft-check="active" ${d.active ? 'checked' : ''}> 種目一覧に表示する</label>
-      <button class="btn btn-primary btn-wide" data-act="ex-save">保存</button>
-      ${ex ? '<button class="btn btn-danger btn-wide" data-act="ex-delete">削除</button>' : ''}
-    </section>`
+    </section>
+    <section class="card form">
+      <h2>部位 <small>最初にオンにしたのが主</small></h2>
+      <div class="toggle-grid">${PARTS.map((p, i) => {
+        const k = d.parts.indexOf(p);
+        return `<button class="toggle-chip p-${i} ${k >= 0 ? 'on' : ''}" data-act="draft-part" data-v="${esc(p)}" aria-pressed="${k >= 0}">
+          <span class="tc-dot">${k >= 0 ? '✓' : ''}</span>${esc(p)}${k === 0 ? '<em>主</em>' : ''}</button>`;
+      }).join('')}</div>
+    </section>
+    <section class="card form">
+      ${d.type !== 'cardio' ? `<label class="field"><span>±ボタンの幅（${d.type === 'bodyweight' ? '加重' : '重さ'}）</span><span class="field-in"><input data-draft="step" inputmode="decimal" value="${esc(v2s(d.step))}">kg</span></label>` : ''}
+      ${d.type === 'strength' ? `<label class="field"><span>はじめの重さ</span><span class="field-in"><input data-draft="initial_weight" inputmode="decimal" value="${esc(v2s(d.initial_weight))}">kg</span></label>
+        ${sw('per_hand', '片手の重さで記録（ダンベル）')}` : ''}
+      ${sw('active', '一覧に出す')}
+    </section>
+    <button class="btn btn-primary btn-wide" data-act="ex-save">保存</button>
+    ${ex ? '<button class="btn btn-danger btn-wide" data-act="ex-delete">削除</button>' : ''}`
   };
 }
 
@@ -1107,29 +1256,28 @@ async function deleteExercise() {
   toast('削除しました');
 }
 
-async function moveExercise(id, dir) {
-  const list = exercisesSorted();
-  const i = list.findIndex(e => e.id === id);
-  const j = i + dir;
-  if (i < 0 || j < 0 || j >= list.length) return;
-  [list[i], list[j]] = [list[j], list[i]];
-  const changed = list.map((e, k) => ({ e, order: (k + 1) * 10 })).filter(x => x.e.sort_order !== x.order).map(x => ({ ...x.e, sort_order: x.order }));
-  await store.putMany('exercises', changed);
-  render();
+// メニュー：筋トレと有酸素に分けて表示（1つ目の種目のタイプで分ける）
+function tplKind(t) {
+  const first = (t.items || [])[0];
+  const ex = first && store.getAny('exercises', first.exercise_id);
+  return ex && ex.type === 'cardio' ? 'c' : 's';
 }
 
 function viewTemplates() {
   const list = templates();
+  const group = (title, xs) => `<section class="card list-card">
+    <h2 class="list-title">${title}</h2>
+    ${xs.map(t => `<a class="list-row" href="#/template/${esc(t.id)}"><span class="row-main"><b>${esc(t.name)}</b>
+      <small>${(t.items || []).length}種目</small></span><span class="chev">›</span></a>`).join('') || '<p class="hint">まだありません</p>'}
+  </section>`;
   return {
-    title: 'テンプレートの管理',
+    title: 'メニュー',
     back: '#/settings',
     tab: 'settings',
-    html: `<section class="card">
-      ${list.map(t => `<a class="nav-line" href="#/template/${esc(t.id)}">${esc(t.name)}
-        <small>${t.weekday != null ? WEEKDAYS[t.weekday] + '曜・' : ''}${(t.items || []).length}種目</small> ›</a>`).join('')}
-    </section>
-    <a class="btn btn-wide" href="#/template/new">＋ テンプレートを追加</a>
-    <a class="btn btn-wide" href="#/import">AI にメニューを作ってもらう（取り込み）</a>`
+    html: `${group('💪 筋トレ', list.filter(t => tplKind(t) === 's'))}
+      ${group('🏃 有酸素', list.filter(t => tplKind(t) === 'c'))}
+      <a class="btn btn-wide" href="#/template/new">＋ メニューを追加</a>
+      <a class="link-wide" href="#/import">🤖 AI にメニューを作ってもらう</a>`
   };
 }
 
@@ -1212,44 +1360,44 @@ function viewPlan() {
   const order = [1, 2, 3, 4, 5, 6, 0];
   const rows = splitRows(cfg, today);
   const num = (k, label, unit, ph = '') => `<label class="field"><span>${label}</span><span class="field-in"><input data-plan-num="${k}" inputmode="decimal" value="${esc(cfg[k] == null ? '' : cfg[k])}" placeholder="${esc(ph)}">${unit}</span></label>`;
+  const fold = (key, title, body, open = false) => `<details class="card fold" data-fold="${key}" ${state.open[key] ?? open ? 'open' : ''}><summary><b>${title}</b></summary>${body}</details>`;
   return {
     title: 'プラン',
     back: '#/settings',
     tab: 'settings',
     html: `<section class="card form">
-      <h2>筋トレ</h2>
-      <div class="field"><span>週の回数</span>${seg('s_freq', [2, 3, 4, 5, 6], v => `${v}回`)}</div>
-      <p class="hint">分け方：${esc((plan.S_SPLITS[cfg.s_freq] || []).map(id => (store.get('templates', id) || {}).name).filter(Boolean).join(' → '))}</p>
+      <h2>💪 筋トレ</h2>
+      ${seg('s_freq', [2, 3, 4, 5, 6], v => `週${v}`)}
+      <p class="hint">${esc((plan.S_SPLITS[cfg.s_freq] || []).map(id => (store.get('templates', id) || {}).name).filter(Boolean).join(' → '))}</p>
     </section>
     <section class="card form">
-      <div class="card-head"><h2>有酸素</h2>
-        <label class="switch"><input type="checkbox" data-plan-check="c_on" ${cfg.c_on ? 'checked' : ''}><span>${cfg.c_on ? 'オン' : 'オフ'}</span></label></div>
-      ${cfg.c_on ? `<div class="field"><span>種類</span>${seg('c_type', ['run', 'swim', 'both'], v => C_TYPE_LABEL[v])}</div>
-        <div class="field"><span>週の回数</span>${seg('c_freq', [2, 3, 4, 5, 6], v => `${v}回`)}</div>
-        ${cfg.c_type === 'swim' && cfg.c_freq > 2 ? '<p class="hint">水泳は塩素の負担があるため、週1〜2回までがおすすめです。</p>' : ''}
-        ${cfg.c_type !== 'swim' ? `<label class="check"><input type="checkbox" data-plan-check="intro" ${cfg.intro_until ? 'checked' : ''}> はじめの期間はランを「導入（歩き混ぜ）」にする</label>
-          ${cfg.intro_until ? `<label class="field"><span>この日まで</span><input type="date" data-plan-date="intro_until" value="${esc(cfg.intro_until)}"></label>` : ''}` : ''}` : ''}
+      <div class="card-head"><h2>🏃 有酸素</h2>
+        <label class="switch"><input type="checkbox" data-plan-check="c_on" ${cfg.c_on ? 'checked' : ''}></label></div>
+      ${cfg.c_on ? `<div class="nested">
+        <div class="field"><span>種類</span>${seg('c_type', ['run', 'swim', 'both'], v => ({ run: '🏃 ラン', swim: '🏊 水泳', both: '両方' })[v])}</div>
+        <div class="field"><span>回数</span>${seg('c_freq', [2, 3, 4, 5, 6], v => `週${v}`)}</div>
+        ${cfg.c_type === 'swim' && cfg.c_freq > 2 ? '<p class="hint">🚿 水泳は週1〜2回までがおすすめ</p>' : ''}
+        ${cfg.c_type !== 'swim' ? `<details class="mini-fold" data-fold="intro" ${state.open.intro ? 'open' : ''}><summary>はじめの期間（ランを導入に）${cfg.intro_until ? `<em>${esc(fmtShort(cfg.intro_until))}まで</em>` : ''}</summary>
+          <label class="switch-row"><span>はじめの期間を使う</span><span class="switch"><input type="checkbox" data-plan-check="intro" ${cfg.intro_until ? 'checked' : ''}></span></label>
+          ${cfg.intro_until ? `<label class="field"><span>この日まで</span><input type="date" data-plan-date="intro_until" value="${esc(cfg.intro_until)}"></label>` : ''}
+        </details>` : ''}
+      </div>` : ''}
     </section>
     <section class="card">
       <h2>1週間のレール</h2>
-      ${pt.intro ? `<h3>${esc(fmtDate(cfg.intro_until))}まで</h3>${order.map(wd => dayLine(pt.intro, wd)).join('')}<h3>そのあと</h3>` : ''}
+      ${pt.intro ? `<h3>${esc(fmtShort(cfg.intro_until))}まで</h3>${order.map(wd => dayLine(pt.intro, wd)).join('')}<h3>そのあと</h3>` : ''}
       ${order.map(wd => dayLine(pt.main, wd)).join('')}
     </section>
-    <section class="card form">
-      <h2>目標の計算に使う値</h2>
-      ${num('body_weight', '体重', 'kg')}
-      ${num('bench_max', 'ベンチプレスの最大（1回）', 'kg', '例 45')}
-      ${num('squat_max', 'スクワットの最大（1回）', 'kg', 'わからなければ空欄')}
-      ${num('pullup_max', '懸垂の最大回数', '回', '例 4')}
-      <p class="hint">記録がある種目は「前回、目標の回数を全セットこなせたら1段階上げる」で自動。記録が無い種目は、最大の値から目安を出します（10回×あと2回の重さ。推定なので、気になるときは下の「AI に確認する」で）。</p>
-    </section>
-    <section class="card">
-      <h2>今日の時点の目標（自動）</h2>
-      ${rows.map(r => `<h3>${esc(r.name)}</h3>${r.items.map(it => `<div class="target-row"><span>${esc(it.name)}</span><span>${esc(it.text)}</span></div>`).join('')}`).join('')}
-    </section>
-    <button class="btn btn-primary btn-wide" data-act="plan-apply">この内容で今日からレールを作り直す</button>
-    <button class="btn btn-wide" data-act="plan-ai">AI に確認する（依頼文をコピー）</button>
-    <a class="link-wide" href="#/import">AI の答えを貼り付けて取り込む ›</a>`
+    ${fold('params', '目標の計算に使う値', `${num('body_weight', '体重', 'kg')}
+      ${num('bench_max', 'ベンチプレスの最大', 'kg', '例 45')}
+      ${num('squat_max', 'スクワットの最大', 'kg', '空欄でOK')}
+      ${num('pullup_max', '懸垂の最大回数', '回', '例 4')}`)}
+    ${fold('targets', '今日の時点の目標', rows.map(r => `<h3>${esc(r.name)}</h3>${r.items.map(it => `<div class="target-row"><span>${esc(it.name)}</span><span>${esc(it.text)}</span></div>`).join('')}`).join(''))}
+    <button class="btn btn-primary btn-wide" data-act="plan-apply">この内容でレールを作り直す</button>
+    ${fold('ai', '🤖 AI に確認する', `<p class="hint">目標の重さが心配なときに。依頼文をコピーして AI に貼り、答えを取り込みます。</p>
+      <button class="btn btn-wide" data-act="plan-ai">依頼文をコピー</button>
+      <a class="btn btn-wide" href="#/import">答えを取り込む</a>`)}
+    ${fold('advanced', 'くわしい設定', '<a class="list-row" href="#/schedule"><span class="row-main"><b>曜日割りを手で調整</b></span><span class="chev">›</span></a>')}`
   };
 }
 
@@ -1297,7 +1445,7 @@ function viewTemplateEdit(id) {
   const d = state.draft;
   const exs = exercisesSorted().filter(e => e.active);
   return {
-    title: t ? 'テンプレートの編集' : 'テンプレートの追加',
+    title: t ? 'メニューの編集' : 'メニューの追加',
     back: '#/templates',
     tab: 'settings',
     html: `<section class="card form">
@@ -1483,11 +1631,26 @@ async function onClick(e) {
       const x = plan.planOn(d.date, lane);
       if (!x) return;
       const name = store.get('templates', x.template_id).name;
-      if (!confirm(`${fmtDate(d.date)}の「${name}」を次の${plan.LANE_LABEL[lane]}の日にずらし、その先の予定も1つずつ後ろにずらします。よろしいですか？`)) return;
-      const n = await plan.postpone(d.date, lane, todayJst());
+      const to = plan.postponeTarget(d.date, lane);
+      const isToday = d.date === todayJst();
+      openModal(`<div class="sheet">
+        <div class="sheet-emoji">${isToday ? '🌙' : '🗓️'}</div>
+        <h2>${isToday ? '今日はお休みにしよう' : '予定をうしろへ'}</h2>
+        <p>「${esc(name)}」は<br><b>${to ? esc(fmtDate(to)) : '次のレールの日'}</b> にお引っ越し。<br>その先の予定も、1つずつうしろにずれます。</p>
+        ${isToday ? '<p class="sheet-soft">休むのも、続けるための大事な一歩 🌱</p>' : ''}
+        <div class="sheet-actions">
+          <button class="btn btn-primary" data-act="plan-postpone-ok" data-date="${d.date}" data-lane="${lane}">ずらす</button>
+          <button class="btn" data-act="modal-close">${isToday ? 'やっぱりやる 💪' : 'やめておく'}</button>
+        </div>
+      </div>`);
+      break;
+    }
+    case 'plan-postpone-ok': {
+      closeModal();
+      const n = await plan.postpone(d.date, d.lane || 's', todayJst());
       await plan.ensure(todayJst());
       render();
-      toast(n ? 'この日から先の予定を、1つずつ後ろにずらしました' : 'ずらせる予定がありませんでした');
+      toast(n ? 'ずらしました。またね 👋' : 'ずらせる予定がありませんでした');
       break;
     }
     case 'plan-rain':
@@ -1560,7 +1723,6 @@ async function onClick(e) {
       toast('保存しました');
       break;
     }
-    case 'ex-move': await moveExercise(d.id, Number(d.d)); break;
     case 'draft-type': state.draft.type = d.v; render(); break;
     case 'draft-part': {
       const ps = state.draft.parts;
@@ -1661,6 +1823,10 @@ function onInput(e) {
     if (ds.export === 'memo') state.exportMemo = el.checked;
     else if (ds.export === 'from') state.exportFrom = el.value;
     else state.exportTo = el.value;
+  } else if (ds.exActive !== undefined) {
+    if (e.type !== 'change') return;
+    const ex = store.get('exercises', ds.exActive);
+    if (ex) store.put('exercises', { ...ex, active: el.checked }).then(() => el.closest('.sort-row').classList.toggle('off', !el.checked));
   } else if (ds.planNum !== undefined) {
     state.draft.cfg[ds.planNum] = parseNum(el.value);
     if (e.type === 'change') render();
@@ -1711,6 +1877,18 @@ function toast(msg, { undo = false, pr = false, html = false } = {}) {
   el.className = 'toast show' + (pr ? ' pr' : '');
   el.innerHTML = `<span class="toast-msg">${html ? msg : esc(msg)}</span>${undo ? '<button class="toast-undo" data-act="undo">取り消す</button>' : ''}`;
   toastTimer = setTimeout(hideToast, undo ? 6000 : 3000);
+}
+
+// できなかった予定を自動でずらしたあとの、ひとこと
+function maybeWelcomeBack() {
+  if (!state.welcome) return;
+  state.welcome = false;
+  openModal(`<div class="sheet">
+    <div class="sheet-emoji">🌱</div>
+    <h2>おかえりなさい</h2>
+    <p>できなかった分は、今日から先に<br>ずらしておきました。<br>レールはそのまま続きます。</p>
+    <div class="sheet-actions"><button class="btn btn-primary" data-act="modal-close">今日もやろう</button></div>
+  </div>`);
 }
 
 function hideToast() {
