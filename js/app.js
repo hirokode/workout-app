@@ -137,12 +137,22 @@ function renderSyncPill(s) {
   el.title = s.message || '';
 }
 
-const TABS = [['home', '今日', '🏋️'], ['history', 'カレンダー', '📅'], ['trends', '推移', '📈'], ['body', '体調', '❤️'], ['settings', '設定', '⚙️']];
+// 下のタブのアイコン（線のアイコン。色は文字色に合わせる）
+const TAB_ICONS = {
+  home: '<path d="M3.5 10.5 12 3.5l8.5 7"/><path d="M5.5 9v11h4.5v-6h4v6h4.5V9"/>',
+  history: '<rect x="3.5" y="5" width="17" height="15.5" rx="3.5"/><path d="M3.5 10h17M8 3v4M16 3v4"/>',
+  trends: '<path d="M4 19.5h16"/><path d="m5 15 4.5-4.5 3.5 3.5L19 8"/><path d="M15 8h4v4"/>',
+  body: '<path d="M12 19.5s-7.5-4.6-7.5-10.2A4.1 4.1 0 0 1 12 7a4.1 4.1 0 0 1 7.5 2.3c0 5.6-7.5 10.2-7.5 10.2z"/>',
+  settings: '<path d="M4 7h9M17 7h3M4 17h3M11 17h9"/><circle cx="15" cy="7" r="2.2"/><circle cx="9" cy="17" r="2.2"/>'
+};
+const TABS = [['home', '今日'], ['history', 'カレンダー'], ['trends', '推移'], ['body', '体調'], ['settings', '設定']];
 
 function renderTabbar(active) {
   const tab = active === 'ex' || active === 'pick' ? 'home' : ['schedule', 'import', 'plan'].includes(active) ? 'settings' : active;
-  document.getElementById('tabbar').innerHTML = TABS.map(([id, label, icon]) =>
-    `<a href="#/${id}" class="tab ${tab === id ? 'active' : ''}"><span class="tab-icon" aria-hidden="true">${icon}</span>${label}</a>`).join('');
+  document.getElementById('tabbar').innerHTML = TABS.map(([id, label]) =>
+    `<a href="#/${id}" class="tab ${tab === id ? 'active' : ''}" ${tab === id ? 'aria-current="page"' : ''}>
+      <span class="tab-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${TAB_ICONS[id]}</svg></span>
+      <span class="tab-label">${label}</span></a>`).join('');
 }
 
 // ---------- ホーム（今日） ----------
@@ -298,7 +308,7 @@ function exCard(ex, it, pg, today) {
         </div>
       </div>
       ${pg.complete
-        ? '<span class="check-badge" aria-label="完了">✓</span>'
+        ? `<button class="check-badge" data-act="card-undo" data-ex="${esc(ex.id)}" aria-label="完了を取り消す"><span>✓</span><small>戻す</small></button>`
         : `<button class="check-btn" data-act="card-done" data-ex="${esc(ex.id)}" aria-label="目標どおりできた"><span>✓</span><small>${partial ? '残り' : 'できた'}</small></button>`}
     </div>
     ${ns || plain.length ? `<details class="ex-more" data-fold="${esc(ex.id)}" ${state.open[ex.id] ? 'open' : ''}>
@@ -1567,6 +1577,29 @@ async function onClick(e) {
     }
     case 'record': await record(d.ex); break;
     case 'card-done': await cardDone(d.ex); break;
+    case 'card-undo': {
+      const ex = calc.exercise(d.ex);
+      const n = calc.exerciseLogs(d.ex).filter(l => l.date === todayJst()).length;
+      if (!ex || !n) return;
+      openModal(`<div class="sheet">
+        <div class="sheet-emoji">↩️</div>
+        <h2>「${esc(ex.name)}」を未完了に戻す？</h2>
+        <p>今日の記録（${n}${ex.type === 'cardio' ? '件' : 'セット'}）を消して、もう一度できるようにします。</p>
+        <div class="sheet-actions">
+          <button class="btn btn-primary" data-act="card-undo-ok" data-ex="${esc(d.ex)}">未完了に戻す</button>
+          <button class="btn" data-act="modal-close">そのままにする</button>
+        </div>
+      </div>`);
+      break;
+    }
+    case 'card-undo-ok': {
+      closeModal();
+      const ls = calc.exerciseLogs(d.ex).filter(l => l.date === todayJst());
+      for (const l of ls) await store.remove('logs', l.id);
+      render();
+      toast('未完了に戻しました');
+      break;
+    }
     case 'step-toggle': {
       const st = stepState(todayJst());
       const list = st.map[d.ex] || [];

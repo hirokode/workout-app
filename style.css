@@ -937,3 +937,18 @@ textarea {
 
 .ex-target u { text-decoration: none; font-size: .7em; font-weight: 600; color: var(--muted); margin-left: 1px; }
 @media (prefers-color-scheme: dark) { .tip { background: color-mix(in srgb, #f2c14e 14%, var(--card)); } }
+
+/* 下のタブ（1.4.1）：線のアイコン＋選んでいるタブは色の付いた丸い背景 */
+.tab { gap: 2px; font-size: .68rem; color: var(--muted); }
+.tab-icon { filter: none; opacity: 1; display: flex; align-items: center; justify-content: center; width: 52px; height: 30px; border-radius: 15px; transition: background .2s, color .2s; }
+.tab-icon svg { width: 23px; height: 23px; }
+.tab.active { color: var(--accent); font-weight: 700; }
+.tab.active .tab-icon { background: color-mix(in srgb, var(--accent) 16%, transparent); filter: none; }
+.tab.active .tab-icon svg { stroke-width: 2.2; }
+.tab:not(.active):active .tab-icon { background: color-mix(in srgb, var(--muted) 12%, transparent); }
+
+/* 完了した種目の ✓：タップで未完了に戻せる */
+button.check-badge { border: 0; flex-direction: column; line-height: 1.05; cursor: pointer; }
+button.check-badge span { font-size: 1.5rem; }
+button.check-badge small { color: inherit; font-size: .6rem; font-weight: 700; opacity: .9; }
+button.check-badge:active { transform: scale(.92); }
